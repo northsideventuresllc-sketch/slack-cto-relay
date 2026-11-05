@@ -111,6 +111,8 @@ export class FireBook {
       case 'review-cleared':
       case 'stop-requested':
       case 'closeout-requested':
+      case 'retry-pending':
+      case 'retry-done':
         return;
       default:
         break;
@@ -153,7 +155,15 @@ export class FireBook {
     return this.order.map((id) => this.byId.get(id)).filter((e): e is FireEntry => !!e);
   }
 
-  /** The already-running lock (D4): held until CLOSED, expires 24 h after start unless refreshed, cleared on a stalled run at 9am. */
+  /**
+   * The already-running lock (D4), R3-NEW-10:
+   * - held from acceptance until CLOSED (or another terminal state);
+   * - refreshed ONLY by a state-changing entry written by the CTO's own adapter
+   *   (claim, start, link, close-out — PROGRESS_STATES); a bare log line never refreshes it;
+   * - expires 24 h after the last such entry — evaluated ON READ, here, at every
+   *   start attempt (no timer has to fire for the lock to clear);
+   * - a stalled run's lock is also cleared at the 9am check-in by the Muse program (`lock-cleared`).
+   */
   lockHolder(nowMs: number): FireEntry | undefined {
     return this.inFlight().find((e) => !e.lockCleared && nowMs - e.lastProgressAt < LOCK_TTL_MS);
   }

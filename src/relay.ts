@@ -1,6 +1,8 @@
 // One relay program = one CTO. Wires the D6 layers:
 //   slack-transport → router → harness-adapters + poster → run-log
 // Fail-closed at startup: no brain → no lease → refuse to start.
+// R7-FU-23: so after a restart during a brain outage, restore + the reconciler
+// wait until the brain returns (systemd retries every 30 s).
 
 import { join } from 'node:path';
 import { cpuUsage, memoryUsage } from 'node:process';
@@ -66,6 +68,7 @@ export class RelayProgram {
   private socketUp = false;
   private readonly lane = new Lane();
   private stopping = false;
+  private duties: MuseDuties | null = null;
 
   constructor(private readonly cfg: RelayConfig) {
     this.log = createLogger(`cto-relay-${cfg.cto.key}`, cfg.logLevel);
@@ -173,6 +176,7 @@ export class RelayProgram {
 
     const poster = new Poster(slack, lease, blocklist, cfg.registry.ctos, runlog, this.log, alert);
     const adapter = makeAdapter(brain, cto, this.clock);
+    const serialize = <T,>(fn: () => Promise<T>): Promise<T> => this.lane.run(fn);
     const core = new RelayCore({
       cto,
       registry: cfg.registry,
@@ -193,8 +197,8 @@ export class RelayProgram {
       metrics,
       blocklist,
       alert,
+      serialize,
     });
-    const serialize = <T,>(fn: () => Promise<T>): Promise<T> => this.lane.run(fn);
     const maintenance = new Maintenance(core, serialize);
     const outbox = new Outbox(cfg.stateDir);
     const closeouts = new Closeouts(core, outbox, new GitVaultReader(cfg.vaultDir, cfg.vaultWebBase), core.d.caps, serialize);
@@ -225,6 +229,7 @@ export class RelayProgram {
     let mirror: MirrorWriter | null = null;
     if (isMuse) {
       duties = new MuseDuties(brain, cfg.registry, poster, slack, this.clock, this.log, alert, (port) => probeHealth(port));
+      this.duties = duties;
       if (cfg.mirrorDir) mirror = new MirrorWriter(cfg.mirrorDir, cfg.registry, blocklist, this.clock, cfg.timezone);
       if (cfg.postQueuePath) {
         const pq = new PostQueueWatcher(cfg.postQueuePath, cfg.stateDir, this.clock, (e) => this.lane.run(() => this.postQueueEntry(e, core, poster)), (r) => alert(`post-queue-${r}`));
@@ -259,6 +264,7 @@ export class RelayProgram {
     if (duties) {
       const d = duties;
       this.every(MIN, () => d.watchSiblings());
+      this.every(MIN, () => d.watchPoller());
       this.every(6 * HOUR, () => d.sweep());
     }
     this.daily(CHECKIN_HOUR, 0, async () => {
@@ -277,8 +283,8 @@ export class RelayProgram {
         core.d.quarantine.prune();
         this.log.info('nightly compaction', r);
       });
-      if (duties && cfg.mirrorDir) {
-        const archived = await duties.archiveOldRows(cfg.mirrorDir);
+      if (duties && cfg.archiveDir) {
+        const archived = await duties.archiveOldRows(cfg.archiveDir);
         this.log.info('brain rows archived', { archived });
       }
     });
@@ -302,6 +308,13 @@ export class RelayProgram {
         const entry = r.entry;
         if (entry) setImmediate(() => void closeouts.attempt(entry).catch((err) => this.log.error('close-out attempt failed', { err: errorCode(err) })));
         return { ok: r.ok, reason: r.ok ? 'queued; the map posts after the vault read-back matches' : r.reason };
+      }
+      case 'copy-check': {
+        // R5-FU-9: nightly off-host copy vs brain rows (Muse program only — it holds the brain key).
+        if (!this.duties) return { ok: false, reason: 'muse-only' };
+        const target = this.cfg.registry.ctos.find((x) => x.key === c.target);
+        if (!target || isPlaceholder(target.agentName)) return { ok: false, reason: 'unknown-target' };
+        return { ok: true, ...(await this.duties.copyCheck(target, c.ids)) };
       }
       case 'review-clear':
         core.reviewClear();

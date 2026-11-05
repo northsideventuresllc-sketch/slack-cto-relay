@@ -155,7 +155,19 @@ export class Closeouts {
         return false;
       }
       const label = cur.vaultLogPath.split('/').pop()?.replace(/\.md$/, '') ?? 'session log';
-      const map = T.map(doneLine, label, logUrl, cur.sessionUrl, stillOpen, d.registry.ctos);
+      // R7-NEW-7: a Session pointer that is not a link (Gemini: mini session name + Slack thread)
+      // is not durable — Slack history goes after a year. It must be filed in the vault log itself,
+      // and the map cites the vault path as the Session's durable copy.
+      let sessionLine = cur.sessionUrl;
+      if (!/^https?:\/\//i.test(cur.sessionUrl)) {
+        if (!rb.bytes.toString('utf8').includes(cur.sessionUrl)) {
+          if (cur.attempts === 0) d.alert('closeout-session-not-filed-in-log', { fireId: cur.fireId });
+          this.outbox.failAttempt(cur, d.clock());
+          return false;
+        }
+        sessionLine = `${cur.sessionUrl} (filed in the log: ${cur.vaultLogPath})`;
+      }
+      const map = T.map(doneLine, label, logUrl, sessionLine, stillOpen, d.registry.ctos);
       const posted = await d.poster.post(d.cto.channelId, map, 'template', cur.fireId);
       if (!posted.ok) {
         this.outbox.failAttempt(cur, d.clock());

@@ -5,7 +5,7 @@
 
 import { join } from 'node:path';
 import type { BrainApi } from './brain.js';
-import { appendLineSync } from './util/durable.js';
+import { appendLineCapped } from './util/durable.js';
 import type { Logger } from './util/log.js';
 import { iso, type Clock } from './util/time.js';
 
@@ -32,7 +32,7 @@ export class Alerter {
   alert(code: string, ids: Record<string, string | number | null> = {}): void {
     const rec = { at: iso(this.clock()), cto: this.cto, code, ...ids };
     try {
-      appendLineSync(this.path, JSON.stringify(rec));
+      appendLineCapped(this.path, JSON.stringify(rec));
     } catch {
       this.log.error('alert file write failed', { code });
     }

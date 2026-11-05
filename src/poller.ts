@@ -10,7 +10,9 @@
 //   down, the local file /var/lib/cto-relay/mini/alerts.jsonl (read by Claude CTO
 //   at the next morning check-in).
 // - Dead-owner fallback (D5 §6): while the Muse relay program is down, the
-//   poller runs the close-out sweep (brain rows + Slack history) every 6 hours.
+//   poller runs the close-out sweep every 6 hours with the REDUCED test
+//   (prongs (b)+(c) only — prong (a) skipped; R7-NEW-4).
+// - Its own liveness: a cto_heartbeat row, agent MINI-POLLER, every run (R7-NEW-5).
 // Secrets arrive on stdin as JSON from the mini's login keychain — never argv/env/disk.
 
 import { readFileSync, existsSync } from 'node:fs';
@@ -19,9 +21,9 @@ import { z } from 'zod';
 import { WebClient, LogLevel } from '@slack/web-api';
 import { DirectBrain, type BrainApi } from './brain.js';
 import { loadRegistry, type Registry } from './config.js';
-import { MuseDuties } from './sweep.js';
+import { MuseDuties, POLLER_AGENT } from './sweep.js';
 import type { Poster } from './poster.js';
-import { appendLineSync, writeFileAtomicSync } from './util/durable.js';
+import { appendLineCapped, writeFileAtomicSync } from './util/durable.js';
 import { createLogger } from './util/log.js';
 import { HOUR, MIN } from './util/time.js';
 
@@ -100,12 +102,15 @@ export async function runPoller(env: NodeJS.ProcessEnv = process.env): Promise<n
   }
   const now = Date.now();
   const { next, d } = decide(state, health.muse === true, hbAge, now);
+  // R7-NEW-5: the poller's own liveness row, watched every minute by the VM Muse program
+  // and shown to Claude CTO at its 9am check-in (`cto-relay checkin-report`).
+  await brain.upsertHeartbeat(POLLER_AGENT, new Date(now).toISOString()).catch(() => undefined);
 
   const send = async (subject: string, body: Record<string, unknown>): Promise<void> => {
     try {
       await brain.insertAlertRow(ALERT_TO, FROM, subject, JSON.stringify(body));
     } catch {
-      appendLineSync(alertsPath, JSON.stringify({ at: new Date(now).toISOString(), subject, ...body }));
+      appendLineCapped(alertsPath, JSON.stringify({ at: new Date(now).toISOString(), subject, ...body }));
     }
   };
   if (d.alertHeartbeat) await send('Muse CTO heartbeat is older than 45 minutes', { heartbeatAgeMs: hbAge, health });
@@ -118,8 +123,14 @@ export async function runPoller(env: NodeJS.ProcessEnv = process.env): Promise<n
     };
     const noPost = { post: async () => ({ ok: false, reason: 'empty' }) } as unknown as Poster; // the fallback sweep never posts as a bot
     const duties = new MuseDuties(brain, registry, noPost, history, () => now, log, () => undefined, async () => false);
-    const findings = await duties.sweep();
-    if (findings.length) await send('cto-relay fallback sweep findings (Muse relay down)', { findings });
+    // R7-NEW-4: the fallback runs the REDUCED still-active test — prongs (b) + (c) only.
+    // Prong (a) is skipped: the mini has no adapter to probe (and no v1 adapter has a live probe anyway).
+    // (b) reads Slack history (last 24 h) of the four CTO channels from config/registry.json with the
+    //     Muse CTO bot token (channels:history / groups:history) from the cto-relay-muse login keychain.
+    // (c) reads evidence.relay.last_progress_at from the LIVE brain rows (not the up-to-24h-stale
+    //     off-host run-log copy), via the cto-relay-muse brain key in the same keychain.
+    const findings = await duties.sweep({ post: false });
+    if (findings.length) await send('cto-relay fallback sweep findings (Muse relay down; reduced test: prongs b+c)', { findings, reducedTest: 'b+c' });
   }
   writeFileAtomicSync(statePath, JSON.stringify(next));
   log.info('poll', { health, heartbeatAgeMs: hbAge, museFails: next.museFails, failover: d.failover });

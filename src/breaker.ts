@@ -1,5 +1,7 @@
-// Circuit breaker (D4): more than 3 accepted start attempts for the same task
-// (same normalized task, same CTO) in 10 minutes stops starting for that task.
+// Circuit breaker (D4). R7-NEW-6 — exact threshold: 3 ACCEPTED attempts for the
+// same task (same normalized task, same CTO) inside one 10-minute window trip
+// the breaker; the 4th attempt is refused and NOT recorded (the count is checked
+// before acceptance: count >= 3 → refuse). At most 3 starts per task per window.
 // Store: one append-only journal record per accepted attempt, kind
 // `breaker-count` (CTO + SHA-256 of the normalized task + window start +
 // attempt timestamp). On restart the program sums the records in the window.

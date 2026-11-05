@@ -27,7 +27,7 @@ export const T = {
   lostOnRestart: (): string => 'A start was lost when the relay restarted. Please re-send it.',
   brainDownTooLong: (): string => 'Not started. Brain was down too long.',
   expired: (): string => 'Not started. It expired.',
-  aborted: (fireId: string): string => `Cancelled: fire id ${fireId}. It will not start.`,
+  cancelled: (fireId: string): string => `Cancelled: fire id ${fireId}. It will not start.`,
   stopRequested: (fireId: string): string =>
     `Fire id ${fireId} was already claimed, so the abort is now a stop request. Muse CTO will stop the run.`,
   stopped: (fireId: string): string => `stopped: fire id ${fireId}.`,
@@ -53,6 +53,15 @@ export const T = {
   /** D5 step 3: the one-line pointer in #cto-bots, tagging all four. */
   pointer: (outcome: string, mapLink: string, ctos: CtoEntry[]): string =>
     `Close-out: ${outcome}. Map is here: ${mapLink} ${ctos.map((c) => `<@${c.botUserId}>`).join(' ')}`,
+  /** R7-NEW-1: posted to the CTO's channel when the sweep flags a stalled run. */
+  stalled: (fireId: string): string => `No activity for 6 hours on fire id ${fireId}. It may be stalled. Muse CTO has been told.`,
+  /** R7-NEW-5: the poller's own liveness (the dead-alerter fallback). */
+  pollerDown: (): string => 'The mini poller has stopped answering. Failover alerts are paused. Muse CTO has been told.',
+  pollerBack: (): string => 'The mini poller is back.',
+  /** R5-FU-9: the nightly off-host copy check found brain rows with no journal record in the copy. */
+  copyGap: (cto: CtoEntry, n: number): string => `Nightly copy check: ${n} start(s) for ${cto.displayName} are missing from the journal copy. Muse CTO has been told.`,
+  /** R7-NEW-3: a start-retry held in memory was lost when the relay restarted. */
+  retryLost: (): string => 'A start waiting for its one retry was lost when the relay restarted. Please re-send it.',
   relayDown: (cto: CtoEntry): string => `${cto.displayName} relay is down. Starts for ${cto.displayName} are paused. Muse CTO has been told.`,
   relayBack: (cto: CtoEntry): string => `${cto.displayName} relay is back.`,
   dailyOpen: (open: string[], owed: string[], pending: string[], stalled: string[]): string =>
@@ -92,6 +101,10 @@ export const TEMPLATE_PREFIXES = [
   'Start one CTO at a time.',
   'I only take /fire commands here.',
   'Could not start this',
+  'No activity for 6 hours',
+  'The mini poller',
+  'Nightly copy check:',
+  'A start waiting for its one retry',
 ];
 
 export function isRelayTemplate(text: string): boolean {

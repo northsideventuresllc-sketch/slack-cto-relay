@@ -28,6 +28,7 @@ two differ).
 | `deploy/systemd/` | The four relay units, `cto-heartbeat`, and the off-host copy timer. |
 | `deploy/scripts/` | Key fetch hook, deploy, mini sync, off-host copy, mini poller and run wrappers. |
 | `docs/RELAY-RUNBOOK.md` | Deploy, operate, fail over, rebuild. |
+| `docs/PLAN-V7-ERRATA.md` | Round-7 plan-text fixes (VERDICT-r7) for Muse CTO to apply to PLAN-v7.md. |
 | `test/` | `node:test` suite (in-memory brain + Slack). |
 
 ## Checks

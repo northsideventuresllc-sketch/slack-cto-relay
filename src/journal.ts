@@ -27,6 +27,8 @@ const FIRE_STATES = [
   'link-posted',
   'lost-notified',
   'closeout-requested',
+  'retry-pending',
+  'retry-done',
 ] as const satisfies readonly FireJournalState[];
 
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -61,6 +63,7 @@ export const TERMINAL_JOURNAL_STATES: ReadonlySet<FireJournalState> = new Set<Fi
   'expired',
   'refused',
   'cancelled',
+  'retry-done', // a start-retry marker is over (R7-NEW-3); purged with the dedup window
 ]);
 
 export type JournalInput = Omit<JournalRecord, 'timestamp'>;

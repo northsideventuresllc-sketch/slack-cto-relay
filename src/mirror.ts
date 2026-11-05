@@ -1,7 +1,12 @@
 // Mirroring (D5): every fire, decision, and blocker thread is summed up into
 // the vault — one short entry per fire and per close-out, one-line summary.
 // Sole mirror writer: the Muse relay program. Entries pass through the same
-// blocklist + redactor as posts. Muse CTO files the weekly file into the vault.
+// blocklist + redactor as posts.
+// R7-FU-11 — filing: the relay host files the mirror into the vault WITHIN A DAY.
+// The nightly cto-relay-offhost-copy.sh (root, 02:30) copies this directory to
+// $VAULT_MIRROR_PATH in the vault checkout and commits + pushes it. Muse CTO's
+// weekly job is the mirror CHECK (thread links + a secrets sample), not the filing.
+// A night whose filing fails raises the off-host hygiene alert.
 
 import { join } from 'node:path';
 import type { Blocklist } from './blocklist.js';

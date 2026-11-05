@@ -1,3 +1,10 @@
+// Post-queue file layout (R7-FU-7): v1 has exactly ONE post-queue file, the
+// Muse one below. The Claude, Gemini and AXON-Hermes programs have no
+// post-queue file: off-VM CTOs cannot write to this VM (D2 v1 note), so their
+// words reach Slack through Muse CTO, i.e. this file. Their programs' `message`
+// events feed only abort parsing; the Muse program's `message` events also feed
+// the mirror writer. The v2 route is a brain post-queue table (D2).
+//
 // The Muse post-queue (D2): `/var/lib/cto-relay/muse/post-queue.jsonl`, owner
 // cto-relay-muse, mode 0600, newline-delimited JSON appended with O_APPEND and
 // fsynced per line. Weekly rotation, 7-day retention, 10MB cap — rotated by the
@@ -31,13 +38,30 @@ export type PostQueueEntry = z.infer<typeof PostQueueEntrySchema>;
 
 const OffsetSchema = z.object({ file: z.string(), ino: z.number(), offset: z.number().int().nonnegative(), createdAt: z.string() });
 
-/** Append helper for Muse CTO's writer (run as cto-relay-muse). */
+/**
+ * Append helper for Muse CTO's writer (run as cto-relay-muse). R7-FU-6: it
+ * opens the file by path on EVERY write (O_APPEND|O_CREAT, then close), so a
+ * write after the program's rename lands in the new file; it retries once on
+ * ENOENT (directory briefly missing). A write that opened just before the rename
+ * lands in the rotated file, which the watcher keeps draining for 60 seconds.
+ */
 export function appendPostQueue(path: string, entry: PostQueueEntry): void {
-  appendLineSync(path, JSON.stringify(PostQueueEntrySchema.parse(entry)), 0o600);
+  const line = JSON.stringify(PostQueueEntrySchema.parse(entry));
+  try {
+    appendLineSync(path, line, 0o600);
+  } catch (err) {
+    if ((err as { code?: string }).code !== 'ENOENT') throw err;
+    appendLineSync(path, line, 0o600);
+  }
 }
+
+/** How long a rotated post-queue file keeps being drained after the rename (R7-FU-6). */
+export const ROTATED_GRACE_MS = 60_000;
 
 export class PostQueueWatcher {
   private readonly offsetPath: string;
+  /** Rotated files still being drained: late writers that opened before the rename land here. */
+  private rotated: Array<{ path: string; offset: number; until: number }> = [];
 
   constructor(
     readonly path: string,
@@ -70,6 +94,9 @@ export class PostQueueWatcher {
     const { offset, createdAt } = this.readOffset(ino);
     const next = await this.consume(this.path, offset);
     if (next !== offset) this.saveOffset(ino, next, createdAt);
+    const now = this.clock();
+    for (const r of this.rotated) r.offset = await this.consume(r.path, r.offset);
+    this.rotated = this.rotated.filter((r) => now < r.until);
     await this.rotateIfDue(createdAt);
   }
 
@@ -121,7 +148,8 @@ export class PostQueueWatcher {
       const rotated = `${this.path}.${iso(now).replace(/[:.]/g, '-')}`;
       renameSync(this.path, rotated);
       closeSync(openSync(this.path, constants.O_CREAT | constants.O_WRONLY, 0o600));
-      await this.consume(rotated, offset);
+      const drained = await this.consume(rotated, offset);
+      this.rotated.push({ path: rotated, offset: drained, until: now + ROTATED_GRACE_MS });
       this.saveOffset(statSync(this.path).ino, 0, iso(now));
     }
     const dir = dirname(this.path);

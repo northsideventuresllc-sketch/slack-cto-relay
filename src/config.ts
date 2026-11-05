@@ -62,6 +62,7 @@ const EnvSchema = z.object({
   CTO_RELAY_HTTPS_PROXY: z.string().url().optional(),
   CTO_RELAY_POST_QUEUE: z.string().min(1).optional(),
   CTO_RELAY_MIRROR_DIR: z.string().min(1).optional(),
+  CTO_RELAY_ARCHIVE_DIR: z.string().min(1).optional(),
   CTO_RELAY_HEALTH_BIND: z.string().min(1).optional(),
   SUPABASE_URL: z.string().url().optional(),
   CTO_RELAY_KEY_DIR: z.string().min(1).optional(),
@@ -82,6 +83,7 @@ export interface RelayConfig {
   httpsProxy: string | null;
   postQueuePath: string | null; // Muse only
   mirrorDir: string | null; // Muse only
+  archiveDir: string | null; // Muse only: brain rows past 90 days, filed into the vault nightly (R7-FU-12)
   healthBind: string[];
   supabaseUrl: string | null; // Muse only (direct brain access); others use the broker
   credentialsDir: string | null;
@@ -141,6 +143,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RelayConfig {
     httpsProxy: e.CTO_RELAY_HTTPS_PROXY ?? null,
     postQueuePath: isMuse ? (e.CTO_RELAY_POST_QUEUE ?? '/var/lib/cto-relay/muse/post-queue.jsonl') : null,
     mirrorDir: isMuse ? (e.CTO_RELAY_MIRROR_DIR ?? join(stateDir, 'mirror')) : null,
+    archiveDir: isMuse ? (e.CTO_RELAY_ARCHIVE_DIR ?? join(stateDir, 'archive')) : null,
     healthBind: e.CTO_RELAY_HEALTH_BIND ? e.CTO_RELAY_HEALTH_BIND.split(',').map((s) => s.trim()) : registry.healthBind,
     supabaseUrl: e.SUPABASE_URL ?? null,
     // The ExecStartPre tmpfs dir wins (fresh fetch on every start, D7); $CREDENTIALS_DIRECTORY is the fallback.

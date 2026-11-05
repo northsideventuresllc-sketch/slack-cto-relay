@@ -5,8 +5,26 @@
 // row. 5. call status(runId) on the adapter for each in-flight run and post the
 // current state. Each `queued` row gets "still waiting" (D4).
 //
+// R2-NEW-1 — every non-terminal state, with its action at takeover:
+//   queued          → "Still waiting: fire id …"; lock rebuilt from the journal.
+//   claimed/started → status(runId) + "Fire id … is <state>."; lock rebuilt.
+//   linked          → status(runId) + "Fire id … is linked."; lock rebuilt (held until CLOSED).
+//   done            → DONE is not a separate brain status in this build: it is
+//                     `linked` + a claim record (D4). It takes the `linked` action.
+// A row whose journal entry is missing is a journal-failure orphan: marked `failed`, requester told.
+//
 // Reconciler (D4, R4-NEW-9/R6-NEW-2): runs on every program start and every 30
-// minutes. Reads the journal's fire-request records and the brain rows.
+// minutes, in EVERY program on its own journal (journals are per program, D6) —
+// not only Muse. Brain-down starts can happen in all four programs, and each
+// writes a hash-only `fire-request` record without a brain row (see
+// core.holdBrainDown), so each program's reconciler can see its own lost starts.
+// R7-FU-23 — during a brain outage: a program that RESTARTS cannot reach the
+// brain, so it refuses to start (D6 fail-closed) and its reconciler runs only
+// once the brain is back and the program starts. In the meantime the requester
+// sees no reply from that CTO's relay; if the Muse program is still running it
+// posts "<CTO> relay is down" in #cto-bots after 3 failed health polls. Loss
+// notices arrive when the program starts after the brain returns.
+// Reads the journal's fire-request records and the brain rows.
 //   - a journal record with no matching brain row is a lost held start → loss
 //     notice in the CTO's channel;
 //   - a brain row with no journal entry (journal-failure orphan) → marked
@@ -88,6 +106,14 @@ export class Maintenance {
         return false;
       });
       if (brainDown) return;
+    }
+    // (a2) start-retries owed but lost on restart (R7-NEW-3): the event was held in memory only
+    for (const lost of this.core.lostRetries()) {
+      await this.serialize(async () => {
+        this.core.markRetryDone(lost.rid, 'lost-on-restart');
+        d.alert('start-retry-lost-on-restart', { rid: lost.rid });
+        if (lost.channelId && this.core.channels.has(lost.channelId)) await d.poster.post(lost.channelId, T.retryLost(), 'template');
+      });
     }
     // (b) brain rows with no journal entry (journal-failure orphans)
     let rows: FireRow[];

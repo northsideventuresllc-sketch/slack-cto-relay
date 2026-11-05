@@ -24,9 +24,10 @@ This runbook is written so Claude CTO can rebuild the relay alone (Phase 2 solo-
   - `audit.jsonl`: redacted text of 80 characters or less, kept 90 days.
   - `quarantine.jsonl`: event id, text hash and reason, kept 7 days.
   - `outbox/`: close-out maps waiting on vault read-back.
-  - `alerts.jsonl`: the local copy of every alert.
+  - `alerts.jsonl`: the local copy of every alert. It is capped at 1 MiB and rotated by rename (`.1`–`.3`), never truncated.
   - `vault/`: this program's checkout of the vault.
-  - Muse only: `post-queue.jsonl` and `mirror/`.
+  - Muse only: `post-queue.jsonl`, `mirror/` and `archive/`.
+- **Post-queue file layout (R7-FU-7):** v1 has exactly one post-queue file, `/var/lib/cto-relay/muse/post-queue.jsonl`. The Claude, Gemini and AXON-Hermes programs have none. Off-VM CTOs cannot write to this VM, so their words go through Muse CTO into the Muse file (D2). Their programs' `message` events feed only abort parsing.
 - **Keys:** `/run/credentials/cto-relay-<cto>/`. This is tmpfs (dir 0500, files 0400, owner = the service user). It is rewritten on every start and wiped on stop.
 - **Sockets:**
   - `/run/cto-relay/<cto>/control.sock` (group `cto-relay-admin`).
@@ -260,6 +261,16 @@ cto-relay admin review-clear --cto claude
 - `--tokens` is omitted when the harness gives no count; the close-out then records "unmetered".
 - Status values written into the brain row: the relay writes `queued`, `linked`, `closed`, `failed`, `expired`, `refused`, `cancelled`; Muse CTO writes `claimed` and `started` through the commands.
 
+### When a start fails before it reaches the adapter (R7-NEW-3)
+1. The program retries the event in-process: 5 attempts with the 1/2/4/8 s backoff.
+2. After 5 failed attempts, a start-pattern event is never quarantined. It gets:
+   - the reply "Could not start this. Muse CTO has been told. One more try in 1 hour.";
+   - an alert;
+   - one retry an hour later.
+3. **Where the retry's content comes from:** the event itself, held **in memory** for that hour. Quarantine, the journal and the run log hold no text.
+4. A hash-only journal marker (`retry-pending`, with the channel id) records that a retry is owed.
+5. If the relay restarts inside that hour, the reconciler finds the unmatched marker. It posts "A start waiting for its one retry was lost when the relay restarted. Please re-send it." in that channel.
+
 ### Muse automatic — the mailbox drain contract
 The drain is outside this repo. It must follow these rules:
 - **Pick up only** `agent_comms` rows with `code = 'cto-relay-fire'`, `to_agent = 'MUSE'`, `status = 'queued'`.
@@ -293,7 +304,11 @@ The drain is outside this repo. It must follow these rules:
 
 ## 7. Close-out (D5)
 
-1. The CTO files a session log in the vault apartments. It must have `## Decided`, `## Why`, `## What failed`, `## Reusable`, and `## Open items` (each item with `Owner: <name>`). Put a `.sha256` sidecar next to it, holding the hex SHA-256 of the file's bytes (`sha256sum` output is fine). Commit and push.
+1. The CTO files a session log in the vault apartments.
+   - It must have `## Decided`, `## Why`, `## What failed`, `## Reusable`, and `## Open items` (each item with `Owner: <name>`).
+   - **Gemini, or any Session pointer that is not a link (R7-NEW-7):** add a `## Session` section that carries the pointer word for word, for example `mini session gem-42 + Slack thread`. Slack history goes after a year, so the vault log is the durable copy. The relay refuses to post the map until the read-back log contains it. The map's Session line then reads `<pointer> (filed in the log: <vault path>)`.
+   - Put a `.sha256` sidecar next to it, holding the hex SHA-256 of the file's bytes (`sha256sum` output is fine).
+   - Commit and push.
 2. Muse CTO runs `cto-relay admin closeout …` for that CTO.
 3. The program fetches the vault and reads the file back from `origin/main`. It hashes the bytes and compares the hash to the sidecar. Only on a match does it post:
    - The map in the CTO's own channel:
@@ -327,7 +342,28 @@ It runs as user `cto-relay-muse`. The secrets come from that user's keychain and
 - **Offline:** the heartbeat is older than 30 min, or the brain is down (fail-safe).
 - **Alert at 45 min:** an `agent_comms` row to CLAUDE. If the brain is down, it writes `/var/lib/cto-relay/mini/alerts.jsonl` instead, which Claude CTO reads at the morning check-in.
 - **Failover detected:** the VM Muse health fails 3 consecutive polls AND Muse CTO is offline. The poller sends the failover row to CLAUDE once.
-- **Dead-owner sweep:** while the Muse program is down, the poller runs the D5 §6 sweep every 6 h (brain rows + Slack history) and sends the findings to CLAUDE.
+- **Dead-owner sweep (R7-NEW-4):** while the Muse program is down, the poller runs the D5 §6 sweep every 6 h with the **reduced** still-active test: prongs (b) + (c) only. Prong (a) is skipped, because the mini has no adapter to probe and no v1 adapter has a live probe anyway.
+  - (b) reads the last 24 h of Slack history in the four CTO channels from `config/registry.json`. It uses the Muse CTO bot token (`channels:history` / `groups:history`) from the `cto-relay-muse` login keychain, keychain item `<KEYCHAIN_ITEM_SLACK_BOT_TOKEN>`.
+  - (c) reads `evidence.relay.last_progress_at` from the **live** brain rows, not from the up-to-24-hours-stale off-host run-log copy.
+  - Findings go to CLAUDE, labelled "reduced test: prongs b+c". The fallback never posts in Slack.
+- **The poller's own liveness (R7-NEW-5):** every run writes a `cto_heartbeat` row for agent `MINI-POLLER`. The VM Muse program checks it every minute. If it is stale for over 5 min, it alerts and posts "The mini poller has stopped answering…" in #cto-bots, once per incident, then "The mini poller is back." on recovery.
+
+### The dead-alerter fallback — Claude CTO's 9am check-in (R7-NEW-5)
+**Who notices.** An offline Muse CTO cannot notice its own stale heartbeat. So the noticer is **Claude CTO, at its own daily 9am check-in**.
+
+**What it runs**, on the mini as `cto-relay-muse` (directly, or `ssh <MINI_SSH_DEST> …`):
+```bash
+/opt/cto-relay/deploy/scripts/mini-checkin.sh
+```
+
+**What it shows:**
+- Muse CTO's heartbeat age (OFFLINE past 30 min, so take the manual starts);
+- the mini poller's heartbeat age (POLLER DOWN past 5 min, so restart its cron);
+- every alert in `/var/lib/cto-relay/mini/alerts.jsonl` not yet shown.
+
+The report records its read position, so each alert is shown once. `alerts.jsonl` is capped at 1 MiB and rotated by rename, keeping 3 old files.
+
+**If the VM Muse program AND the poller are both down,** this report is where it shows: both heartbeats are stale.
 
 ### Failover (RTO 15 minutes)
 1. **Verify the mini.** On the mini, run the checked step:
@@ -362,7 +398,17 @@ Each program runs as its own macOS user (`cto-relay-<cto>`) with its own login k
 
 ## 9. Off-host copy, hygiene, restore drill
 
-- **Nightly** (`cto-relay-offhost-copy.timer`, 02:30): copies each program's `journal.jsonl` and `run-log.jsonl` to the mini, with per-file `.sha256`. It writes `backups/<date>.sha256` into the vault and commits it. It verifies checksum + record count on the mini. On failure it writes an alert for the 9am check-in.
+- **Nightly** (`cto-relay-offhost-copy.timer`, 02:30):
+  1. Copies each program's `journal.jsonl` and `run-log.jsonl` to the mini, with per-file `.sha256`.
+  2. Writes `backups/<date>.sha256` into the vault.
+  3. Verifies checksum + record count on the mini.
+  4. **Copy vs brain (R5-FU-9):** `cto-relay copy-check` hands each copy's fire ids to the Muse program. It posts a gap in #cto-bots when a brain row fired 1–23 h ago has no journal record in the copy.
+  5. **Files the mirror and the brain-row archive into the vault within a day** (R7-FU-11, R7-FU-12): `muse/mirror/` goes to `$VAULT_MIRROR_PATH`, and `muse/archive/brain-archive-<YYYY-MM>.jsonl` goes to `$VAULT_ARCHIVE_PATH`. The archive is JSON lines, one full `agent_comms` row per line.
+  6. Commits and pushes.
+
+  On any failure it writes a capped alert for the 9am check-in.
+- **Mirror (R7-FU-11):** the relay host files it within a day, through the job above. Muse CTO's weekly job is the mirror **check** (thread links + a secrets sample), not the filing.
+- **Retrieval test:** include the archive folder (`$VAULT_ARCHIVE_PATH`) in the vault search, so starts older than 90 days stay findable (R7-FU-12).
 - **Restore drill**, monthly (first Monday):
   1. On a scratch host or the mini, place a copy's `journal.jsonl` into an empty state dir.
   2. Start that program with `CTO_RELAY_HOLDER=drill` against a **stopped** VM program.
@@ -410,7 +456,8 @@ Coordination notes (strategy discussion, open items, decisions) are not blocked.
 | Every minute | held brain-down retries, link window (Muse 35 min), claim limit (manual 30 min), 24 h expiry, outbox retries; Muse: sibling watch | each program |
 | Every 5 min | own brain rows: claims, starts, run links, cancels, lock clears | each program |
 | Every 30 min | reconciler (lost starts, journal orphans) | each program |
-| Every 6 h | close-out sweep (stalled 6 h; unclosed 24 h + still-active test) | Muse program |
+| Every minute | mini poller heartbeat watch (`MINI-POLLER`, stale over 5 min) | Muse program |
+| Every 6 h | close-out sweep. A run silent 6 h is flagged by the **first sweep after** 6 h of silence, so 6–12 h after its last activity (R7-NEW-1). The stalled warning is posted to the CTO's channel at once and listed again at 9am. Unclosed means over 24 h. | Muse program |
 | 9:00 local | pending starts in each CTO channel; Muse: clear stalled locks, sweep, daily open in #cto-bots | each program / Muse |
 | 03:00 local | journal compaction (dedup entries > 24 h, close-out keys > 90 days), run-log/audit/quarantine retention | each program |
 | Every 15 min | `cto-heartbeat` | VM timer |
@@ -419,6 +466,22 @@ Coordination notes (strategy discussion, open items, decisions) are not blocked.
 | First Monday | Slack export test, restore drill | Muse CTO |
 
 ---
+
+## 11a. The still-active test and "stalled" — one definition (KAR-6, R7-NEW-2)
+
+A run is **still active** if any of these holds:
+- **(a)** The adapter's `status(runId)` reports it live. This counts **only for an adapter with a real live probe** (`liveStatus: true`). **No v1 adapter has one.** Muse and the three manual adapters all read the stored brain row, so in v1 prong (a) does not apply.
+- **(b)** The CTO's channel has a message from that CTO in the last 6 h. Relay templates do not count.
+- **(c)** The run is under way (`claimed`/`started`/`linked`) and its last state-changing entry by the CTO's own adapter is under 6 h old.
+
+**Stalled** means not still active, which in v1 means no (b) and no (c) activity for 6 h. D5's "fails all three for 6 hours" and §6's "no activity for 6 hours" are the same test here.
+
+**Unclosed** means stalled with the last activity over 24 h old.
+
+## 11b. Brain outage — what the requester sees (R7-FU-23)
+- **The first 90 s of an outage:** starts are held in memory. The requester gets "Queued. Brain is down. Will retry." (Muse) or "Waiting. It will start at the next check-in…" (manual).
+- **After 3 missed lease heartbeats (90 s):** a running program stops firing and posting (lease rule). New starts in that time get **no reply**. **COUNCIL GATE flag:** the plan's brain-down reply path only covers outages shorter than 90 s.
+- **A program that restarts during the outage** cannot reach the brain, so it refuses to start (fail-closed). Its restore and reconciler run once the brain is back and it starts; loss notices arrive then. Meanwhile, if the Muse program is still up, it posts "<CTO> relay is down" in #cto-bots after 3 failed health polls.
 
 ## 12. Kill switch
 
@@ -451,4 +514,4 @@ Local checks, run in the repo:
 ```bash
 npm ci && npm run check
 ```
-That runs typecheck (`tsc --noEmit`), the test suite (52 tests), and the key-pattern grep.
+That runs typecheck (`tsc --noEmit`), the test suite (62 tests), and the key-pattern grep. Run `npm run lint:shell` for the deploy scripts.

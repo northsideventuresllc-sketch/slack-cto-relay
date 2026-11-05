@@ -3,8 +3,10 @@
 // slack-transport to send and run-log to record (D6 layers).
 //
 // D5: every start writes a `started` entry keyed by fire id (session id null
-// until the link exists, filled by the `linked` entry). The sweep matches on
-// fire id, not session id.
+// until the link exists). R7-FU-5 — the fill mechanism: the run log is
+// append-only; "filled on linked" is a NEW entry of kind `linked` with the same
+// fire id and `sessionId` set (RunLogEntry below). Nothing is updated in place.
+// The sweep matches on fire id, not session id.
 
 import { join } from 'node:path';
 import { appendLineSync, readJsonLines, writeFileAtomicSync } from './util/durable.js';

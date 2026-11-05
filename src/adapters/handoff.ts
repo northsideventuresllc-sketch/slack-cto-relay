@@ -27,6 +27,8 @@ abstract class BrainHandoffAdapter implements HarnessAdapter {
   ) {}
 
   protected abstract readonly startStatus: FireStatus;
+  /** KAR-6: status() reads the stored brain row — not a live probe of the harness. */
+  readonly liveStatus = false;
 
   async fire(req: FireRequest): Promise<{ runId: string; runChatUrl: string | null; status: FireStatus }> {
     const meta = req.meta;

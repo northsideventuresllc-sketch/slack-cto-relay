@@ -63,6 +63,8 @@ export interface CoreDeps {
   alert: (code: string, ids?: Record<string, string | number | null>) => void;
   schedule?: (ms: number, fn: () => void) => void;
   sleep?: (ms: number) => Promise<void>;
+  /** The event lane (relay.ts). Deferred work (the 1-hour start retry) re-enters it. */
+  serialize?: <T>(fn: () => Promise<T>) => Promise<T>;
 }
 
 export interface StartContext {
@@ -156,25 +158,72 @@ export class RelayCore {
     return this.d.sleep ? this.d.sleep(ms) : new Promise((r) => setTimeout(r, ms));
   }
 
-  /** Start-pattern events: never quarantined; failure reply + alert, one retry after 1 hour, capped at one. */
+  /** In-memory store of start events waiting for their single 1-hour retry (R7-NEW-3), by retry id. */
+  readonly pendingRetries = new Map<string, SlackEvent>();
+
+  static retryId(evKey: string): string {
+    return `retry-${evKey.slice(0, 32)}`;
+  }
+
+  /**
+   * Start-pattern events: never quarantined; failure reply + alert, one retry after 1 hour, capped at one.
+   *
+   * R7-NEW-3 — the retry's content source: the event itself, held IN MEMORY
+   * (`pendingRetries`) for the hour. Quarantine, the journal and the run log hold
+   * no text, so nothing on disk can replay it. A hash-only journal marker
+   * (`retry-pending`, with the channel id) records that a retry is owed; if the
+   * relay restarts before the retry runs, the in-memory event is gone, and the
+   * reconciler finds the unmatched marker and posts "A start waiting for its one
+   * retry was lost when the relay restarted. Please re-send it." in that channel.
+   */
   private async startFailed(ev: SlackEvent, evKey: string, first: boolean, idemAt: number = this.now()): Promise<void> {
     this.d.alert(first ? 'start-event-failed' : 'start-event-failed-final', { eventKey: evKey });
+    const rid = RelayCore.retryId(evKey);
     if (first && this.d.quarantine.claimStartRetry(evKey)) {
+      try {
+        this.stateRecord(rid, 'retry-pending', { channelId: ev.channelId });
+      } catch {
+        this.d.log.warn('retry marker not journaled', { eventKey: evKey });
+      }
+      this.pendingRetries.set(rid, ev);
       await this.d.poster.post(ev.channelId, REPLY_START_FAILED_FIRST, 'template');
-      const run = (): void => {
-        void (async () => {
-          const ctx: StartContext = { eventKey: evKey, channelId: ev.channelId, authorId: ev.authorId, messageTs: ev.timestamp || null, receivedAt: this.now(), idemAt, isRetry: true, reachedAdapter: false };
-          try {
-            await this.handleStartIngress(ev, ctx);
-          } catch {
-            await this.startFailed(ev, evKey, false, idemAt);
-          }
-        })();
+      const attempt = async (): Promise<void> => {
+        const held = this.pendingRetries.get(rid);
+        if (!held) return;
+        this.pendingRetries.delete(rid);
+        const ctx: StartContext = { eventKey: evKey, channelId: held.channelId, authorId: held.authorId, messageTs: held.timestamp || null, receivedAt: this.now(), idemAt, isRetry: true, reachedAdapter: false };
+        try {
+          await this.handleStartIngress(held, ctx);
+          this.markRetryDone(rid, 'retried');
+        } catch {
+          this.markRetryDone(rid, 'retry-failed');
+          await this.startFailed(held, evKey, false, idemAt);
+        }
       };
-      (this.d.schedule ?? ((ms, fn) => setTimeout(fn, ms).unref()))(START_RETRY_DELAY_MS, run);
+      const serialize = this.d.serialize ?? (<T,>(fn: () => Promise<T>) => fn());
+      (this.d.schedule ?? ((ms, fn) => setTimeout(fn, ms).unref()))(START_RETRY_DELAY_MS, () => void serialize(attempt));
       return;
     }
     await this.d.poster.post(ev.channelId, REPLY_START_FAILED_FINAL, 'template');
+  }
+
+  markRetryDone(rid: string, reason: string): void {
+    try {
+      this.stateRecord(rid, 'retry-done', { reason });
+    } catch {
+      this.d.log.warn('retry-done not journaled', { rid });
+    }
+  }
+
+  /** Retry markers with no `retry-done` whose event is no longer held in memory (lost on restart). */
+  lostRetries(): Array<{ rid: string; channelId: string }> {
+    const open = new Map<string, string>();
+    for (const r of this.d.journal.all()) {
+      if (r.kind !== 'fire-state' || !r.fireId.startsWith('retry-')) continue;
+      if (r.state === 'retry-pending') open.set(r.fireId, r.channelId ?? '');
+      if (r.state === 'retry-done') open.delete(r.fireId);
+    }
+    return [...open].filter(([rid]) => !this.pendingRetries.has(rid)).map(([rid, channelId]) => ({ rid, channelId }));
   }
 
   /** Allowlist (authors + the five CTO channels), then the pattern; anything else is ignored and logged. */
@@ -335,7 +384,17 @@ export class RelayCore {
     return 'started';
   }
 
-  /** Brain down: hold the text in memory, journal only its hash, reply, retry hourly, expire at 24 h. */
+  /**
+   * Brain down: hold the text in memory, journal only its hash, reply, retry hourly, expire at 24 h.
+   *
+   * R7-FU-1 / R4-NEW-9 — the stated exception to the fixed write order (brain
+   * row → journal → reply): when the brain write fails, a `fire-request` journal
+   * record (hash only, `provisional: true`, a local `p-…` fire id) is written
+   * WITHOUT a brain row, so the reconciler has something to find after a restart.
+   * False-positive guard: the reconciler treats a provisional record as lost only
+   * when its text is no longer held in memory (`heldTask === null`); a pending
+   * hourly retry is never reported lost.
+   */
   private async holdBrainDown(task: string, taskHash: string, normHash: string, idemKey: string, ctx: StartContext): Promise<StartOutcome> {
     const provisionalId = `p-${randomUUID()}`;
     try {
@@ -428,7 +487,7 @@ export class RelayCore {
     if (e.provisional) {
       e.heldTask = null;
       this.stateRecord(e.id, 'cancelled', { reason: 'abort' });
-      await this.d.poster.post(e.channelId, T.aborted(e.id), 'template', e.id);
+      await this.d.poster.post(e.channelId, T.cancelled(e.id), 'template', e.id);
       return;
     }
     try {
@@ -443,7 +502,7 @@ export class RelayCore {
     }
     this.stateRecord(e.id, 'cancelled', { reason: 'abort' });
     this.d.runlog.write({ kind: 'state', fireId: e.id, state: 'cancelled', writer: 'relay' });
-    await this.d.poster.post(e.channelId, T.aborted(e.id), 'template', e.id);
+    await this.d.poster.post(e.channelId, T.cancelled(e.id), 'template', e.id);
   }
 
   private async stopRequest(e: FireEntry, reason: string): Promise<void> {

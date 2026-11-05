@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { stillActive, STALL_MS } from '../src/sweep.js';
+import { stillActive, assessRun, STALL_MS } from '../src/sweep.js';
 import { decide } from '../src/poller.js';
 import { Journal } from '../src/journal.js';
 import { PostQueueWatcher, appendPostQueue, type PostQueueEntry } from '../src/postqueue.js';
@@ -15,13 +15,24 @@ import { Maintenance } from '../src/maintenance.js';
 import { DAY, HOUR, MIN } from '../src/util/time.js';
 import { FakeBrain, FakeClock, testRegistry, makeHarness, mention } from './helpers.js';
 
-test('still-active test: (a) live status, (b) CTO channel message < 6 h, (c) started + own-adapter entry < 6 h', () => {
+test('still-active test (KAR-6, R7-NEW-2): prong (a) only with a live probe; one stalled definition', () => {
   const now = 10 * DAY;
-  assert.equal(stillActive({ adapterState: 'closed', channelMsgAt: null, rowStatus: 'closed', lastAdapterEntryAt: null, now }), false);
-  assert.equal(stillActive({ adapterState: 'started', channelMsgAt: null, rowStatus: 'started', lastAdapterEntryAt: null, now }), true);
-  assert.equal(stillActive({ adapterState: 'failed', channelMsgAt: now - STALL_MS + 1, rowStatus: 'failed', lastAdapterEntryAt: null, now }), true);
-  assert.equal(stillActive({ adapterState: 'expired', channelMsgAt: null, rowStatus: 'started', lastAdapterEntryAt: now - HOUR, now }), true);
-  assert.equal(stillActive({ adapterState: 'expired', channelMsgAt: now - STALL_MS, rowStatus: 'started', lastAdapterEntryAt: now - STALL_MS, now }), false);
+  const base = { liveState: null, channelMsgAt: null, rowStatus: 'started', lastAdapterEntryAt: null, now };
+  // v1: no live probe → a row stuck in `started` with no activity IS stalled (stored status does not count)
+  assert.deepEqual(assessRun(base).stalled, true);
+  // with a live probe, a live run is still active
+  assert.equal(stillActive({ ...base, liveState: 'started' }), true);
+  assert.equal(stillActive({ ...base, liveState: 'closed' }), false);
+  // (b) CTO channel message under 6 h
+  assert.equal(stillActive({ ...base, channelMsgAt: now - STALL_MS + 1 }), true);
+  // (c) under way + own-adapter entry under 6 h (claimed / started / linked)
+  for (const rowStatus of ['claimed', 'started', 'linked']) assert.equal(stillActive({ ...base, rowStatus, lastAdapterEntryAt: now - HOUR }), true);
+  assert.equal(stillActive({ ...base, rowStatus: 'queued', lastAdapterEntryAt: now - HOUR }), false);
+  // exactly 6 h of silence → stalled; over 24 h → also unclosed
+  const six = assessRun({ ...base, lastAdapterEntryAt: now - STALL_MS });
+  assert.equal(six.stalled, true);
+  assert.equal(six.unclosed, false);
+  assert.equal(assessRun({ ...base, lastAdapterEntryAt: now - 25 * HOUR }).unclosed, true);
 });
 
 test('mini poller: 30-minute detection, 45-minute alert, failover after 3 failed polls AND a stale heartbeat', () => {

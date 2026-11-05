@@ -14,19 +14,53 @@ import { DAY, HOUR, iso, type Clock } from './util/time.js';
 export const STALL_MS = 6 * HOUR;
 export const UNCLOSED_MS = 24 * HOUR;
 export const BRAIN_ROW_RETENTION_MS = 90 * DAY;
+export const POLLER_AGENT = 'MINI-POLLER';
+export const POLLER_STALE_MS = 5 * 60_000;
 
 /**
- * The still-active test (D5 close signal). A run is still active if ANY holds:
- * (a) the adapter's status(runId) reports the run as live (not closed/failed/expired);
- * (b) the CTO's channel has a message from that CTO in the last 6 hours;
- * (c) the brain row status is `started` AND the last run-log entry was written
- *     by the CTO's own adapter in the last 6 hours.
+ * The still-active test and the ONE stalled definition (D5 close signal + §6;
+ * KAR-6, R7-NEW-2). A run is still active if ANY holds:
+ * (a) the adapter's status(runId) reports the run as live — counted ONLY when
+ *     the adapter has a real live probe (`liveStatus`). No v1 adapter has one:
+ *     Muse and the three manual adapters all read the stored brain row, so
+ *     prong (a) does NOT apply in v1, and still-active rests on (b) + (c);
+ * (b) the CTO's channel has a message from that CTO in the last 6 hours
+ *     (relay templates excluded);
+ * (c) the run is under way (brain row `claimed`, `started` or `linked`) AND the
+ *     last state-changing run-log entry by the CTO's own adapter is under 6 hours old.
+ *
+ * Stalled ⟺ NOT still active ⟺ (with no live probe) no activity — no (b)
+ * message and no (c) entry — for 6 hours. D5 "fails all three for 6 hours" and
+ * §6 "no activity for 6 hours" are the same test here, by construction.
+ * Unclosed ⟺ stalled AND the last activity is over 24 hours old.
  */
-export function stillActive(input: { adapterState: string; channelMsgAt: number | null; rowStatus: string; lastAdapterEntryAt: number | null; now: number }): boolean {
-  const a = !['closed', 'failed', 'expired', 'cancelled', 'refused'].includes(input.adapterState);
-  const b = input.channelMsgAt !== null && input.now - input.channelMsgAt < STALL_MS;
-  const c = input.rowStatus === 'started' && input.lastAdapterEntryAt !== null && input.now - input.lastAdapterEntryAt < STALL_MS;
-  return a || b || c;
+export interface RunActivity {
+  liveState: string | null; // adapter status() result; null = the adapter has no live probe (all v1 adapters)
+  channelMsgAt: number | null;
+  rowStatus: string;
+  lastAdapterEntryAt: number | null;
+  now: number;
+}
+
+const UNDER_WAY = new Set(['claimed', 'started', 'linked']);
+const ENDED = new Set(['closed', 'failed', 'expired', 'cancelled', 'refused']);
+
+export function lastActivityAt(a: RunActivity): number | null {
+  const xs = [a.channelMsgAt, UNDER_WAY.has(a.rowStatus) ? a.lastAdapterEntryAt : null].filter((x): x is number => x !== null);
+  return xs.length ? Math.max(...xs) : null;
+}
+
+export function stillActive(a: RunActivity): boolean {
+  const pa = a.liveState !== null && !ENDED.has(a.liveState);
+  const pb = a.channelMsgAt !== null && a.now - a.channelMsgAt < STALL_MS;
+  const pc = UNDER_WAY.has(a.rowStatus) && a.lastAdapterEntryAt !== null && a.now - a.lastAdapterEntryAt < STALL_MS;
+  return pa || pb || pc;
+}
+
+export function assessRun(a: RunActivity): { stillActive: boolean; stalled: boolean; unclosed: boolean; lastActivity: number | null } {
+  const active = stillActive(a);
+  const last = lastActivityAt(a);
+  return { stillActive: active, stalled: !active, unclosed: !active && (last === null || a.now - last > UNCLOSED_MS), lastActivity: last };
 }
 
 export interface SweepFinding {
@@ -43,6 +77,8 @@ export class MuseDuties {
   findings: SweepFinding[] = [];
   private siblingFails = new Map<string, number>();
   private siblingDown = new Set<string>();
+  private stallPosted = new Set<string>();
+  private pollerDown = false;
 
   constructor(
     private readonly brain: BrainApi,
@@ -75,8 +111,14 @@ export class MuseDuties {
     }
   }
 
-  /** Every 6 hours. Flags (1) stalled-and-unclosed and (2) unclosed, separately. Matches on fire id. */
-  async sweep(): Promise<SweepFinding[]> {
+  /**
+   * Every 6 hours. Flags (1) stalled and (2) unclosed, separately, matching on
+   * fire id. Detection timing (R7-NEW-1): a run is flagged by the FIRST sweep
+   * after 6 hours of silence — so between 6 and 12 hours after its last
+   * activity, not "within 6 hours". The warning is posted to the CTO's channel
+   * at once when flagged (once per silence), and listed again in the next 9am message.
+   */
+  async sweep(opts: { post?: boolean } = {}): Promise<SweepFinding[]> {
     const now = this.clock();
     const out: SweepFinding[] = [];
     for (const cto of this.ctos()) {
@@ -91,11 +133,24 @@ export class MuseDuties {
       const msgAt = await this.lastCtoMessageAt(cto);
       for (const row of rows) {
         const ev = relayEvidence(row);
-        const progress = ev?.last_progress_at ? Date.parse(ev.last_progress_at) : Date.parse(row.fired_at ?? '');
-        const lastActivity = Math.max(Number.isFinite(progress) ? progress : 0, msgAt ?? 0);
-        if (now - lastActivity >= STALL_MS) out.push({ cto: cto.key, fireId: row.id, kind: 'stalled' });
-        const active = stillActive({ adapterState: row.status ?? '', channelMsgAt: msgAt, rowStatus: row.status ?? '', lastAdapterEntryAt: Number.isFinite(progress) ? progress : null, now });
-        if (now - lastActivity > UNCLOSED_MS && !active) out.push({ cto: cto.key, fireId: row.id, kind: 'unclosed' });
+        const progress = Date.parse(ev?.last_progress_at ?? row.fired_at ?? '');
+        const verdict = assessRun({
+          liveState: null, // no v1 adapter has a live probe (KAR-6): prong (a) does not apply
+          channelMsgAt: msgAt,
+          rowStatus: row.status ?? '',
+          lastAdapterEntryAt: Number.isFinite(progress) ? progress : null,
+          now,
+        });
+        if (verdict.stalled) {
+          out.push({ cto: cto.key, fireId: row.id, kind: 'stalled' });
+          const key = `${row.id}|${verdict.lastActivity ?? 'none'}`;
+          if (opts.post !== false && !this.stallPosted.has(key)) {
+            this.stallPosted.add(key);
+            this.alert('run-stalled', { cto: cto.key, fireId: row.id });
+            await this.poster.post(cto.channelId, T.stalled(row.id), 'template', row.id);
+          }
+        }
+        if (verdict.unclosed) out.push({ cto: cto.key, fireId: row.id, kind: 'unclosed' });
       }
     }
     this.findings = out;
@@ -146,10 +201,13 @@ export class MuseDuties {
 
   /**
    * Nightly: brain rows are retained 90 days, then archived to the vault (D6
-   * store table). Terminal start rows older than 90 days are exported to
-   * <mirrorDir>/brain-archive-<YYYY-MM>.jsonl (filed into the vault weekly with
-   * the mirror) and marked `archived_at`. Rows are NOT deleted from the brain:
-   * deletion after archive is a COUNCIL GATE decision.
+   * store table). R7-FU-12 — home and format: terminal start rows older than
+   * 90 days are exported to /var/lib/cto-relay/muse/archive/brain-archive-<YYYY-MM>.jsonl
+   * (JSON lines, one full agent_comms row per line, task text in `body`) and marked
+   * `archived_at`. The nightly cto-relay-offhost-copy.sh files that directory into
+   * the vault at $VAULT_ARCHIVE_PATH within a day, where the retrieval test can
+   * find it. Rows are NOT deleted from the brain: deletion after archive is a
+   * COUNCIL GATE decision.
    */
   async archiveOldRows(dir: string): Promise<number> {
     const now = this.clock();
@@ -167,6 +225,53 @@ export class MuseDuties {
       }
     }
     return n;
+  }
+
+  /**
+   * R7-NEW-5 — breaks the dead-alerter circle. The mini poller writes its own
+   * cto_heartbeat row (agent MINI-POLLER) every minute; this program checks it
+   * every minute. Stale over 5 minutes → alert + visible post in #cto-bots, once
+   * per incident. If BOTH this program and the poller are down, Claude CTO's
+   * own 9am check-in (`cto-relay checkin-report`) shows both stale heartbeats.
+   */
+  async watchPoller(): Promise<void> {
+    let age: number;
+    try {
+      const hb = await this.brain.getHeartbeat(POLLER_AGENT);
+      age = hb ? this.clock() - Date.parse(hb.heartbeat_at) : Number.POSITIVE_INFINITY;
+    } catch {
+      return; // brain down: the lease rule already stops this program
+    }
+    if (age > POLLER_STALE_MS && !this.pollerDown) {
+      this.pollerDown = true;
+      this.alert('mini-poller-stale', { ageMs: Number.isFinite(age) ? age : null });
+      await this.poster.post(this.registry.ctoBotsChannelId, T.pollerDown(), 'template');
+    } else if (age <= POLLER_STALE_MS && this.pollerDown) {
+      this.pollerDown = false;
+      await this.poster.post(this.registry.ctoBotsChannelId, T.pollerBack(), 'template');
+    }
+  }
+
+  /**
+   * R5-FU-9 — the nightly off-host copy check against the brain rows. `copyIds`
+   * are the fire ids found in last night's journal copy for `cto`. Any brain row
+   * fired 1–23 hours ago (not refused) with no id in the copy is a gap: posted in
+   * #cto-bots and alerted.
+   */
+  async copyCheck(cto: CtoEntry, copyIds: string[]): Promise<{ gap: number }> {
+    const now = this.clock();
+    const seen = new Set(copyIds);
+    const statuses = ['queued', 'claimed', 'started', 'linked', 'closed', 'failed', 'expired', 'cancelled'];
+    const rows = await this.brain.listFireRows(cto.agentName, statuses);
+    const gap = rows.filter((r) => {
+      const at = Date.parse(r.fired_at ?? '');
+      return Number.isFinite(at) && now - at >= HOUR && now - at <= 23 * HOUR && !seen.has(r.id);
+    });
+    if (gap.length > 0) {
+      this.alert('offhost-copy-gap', { cto: cto.key, gap: gap.length });
+      await this.poster.post(this.registry.ctoBotsChannelId, T.copyGap(cto, gap.length), 'template');
+    }
+    return { gap: gap.length };
   }
 
   /** Every minute: the visible failure for a sibling program that is down (e.g. its token was revoked). */

@@ -12,6 +12,7 @@ import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { ensureDir } from './util/durable.js';
+import { CTO_KEYS } from './config.js';
 import type { Logger } from './util/log.js';
 
 export const ControlCommandSchema = z.discriminatedUnion('cmd', [
@@ -30,6 +31,7 @@ export const ControlCommandSchema = z.discriminatedUnion('cmd', [
   z.object({ cmd: z.literal('review-clear') }),
   z.object({ cmd: z.literal('journal-has'), fireId: z.string().min(8) }),
   z.object({ cmd: z.literal('status') }),
+  z.object({ cmd: z.literal('copy-check'), target: z.enum(CTO_KEYS), ids: z.array(z.string().min(1).max(64)).max(20_000) }),
   z.object({ cmd: z.literal('test-fail-next-journal-write') }),
 ]);
 export type ControlCommand = z.infer<typeof ControlCommandSchema>;
@@ -55,7 +57,7 @@ export class ControlServer {
       sock.setEncoding('utf8');
       sock.on('data', (chunk: string) => {
         buf += chunk;
-        if (buf.length > 16 * 1024) return void sock.destroy();
+        if (buf.length > 2 * 1024 * 1024) return void sock.destroy();
         const nl = buf.indexOf('\n');
         if (nl < 0) return;
         const line = buf.slice(0, nl);

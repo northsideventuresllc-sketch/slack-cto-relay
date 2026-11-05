@@ -16,8 +16,11 @@ EXPECTED_REL="${CTO_RELAY_EXPECTED_PATH:-<VAULT_PATH_TO>/cto-relay-expected.json
 ALERTS=/var/lib/cto-relay/mini/alerts.jsonl
 mode="${1:-verify}"
 
-alert() {
+alert() { # capped (R7-NEW-5): rotate past 1 MiB by rename, keep 3; read by Claude CTO's check-in report
   mkdir -p "$(dirname "$ALERTS")"
+  if [ -f "$ALERTS" ] && [ "$(wc -c < "$ALERTS")" -gt 1048576 ]; then
+    rm -f "$ALERTS.3"; [ -f "$ALERTS.2" ] && mv "$ALERTS.2" "$ALERTS.3"; [ -f "$ALERTS.1" ] && mv "$ALERTS.1" "$ALERTS.2"; mv "$ALERTS" "$ALERTS.1"
+  fi
   printf '{"at":"%s","code":"%s","detail":"%s"}\n' "$(date -u +%FT%TZ)" "$1" "$2" >> "$ALERTS"
   echo "ABORT: $1 ($2)" >&2
 }

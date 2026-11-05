@@ -54,6 +54,7 @@ export class HealthServer {
       ackBreachCount: m.ackBreachCount,
       adapter,
       queueDepth: this.src.queueDepth(),
+      leaseState: lease.state,
       lease,
       latency: { fire: m.fire.summary(), link: m.link.summary(), manualQueue: m.manualQueue.summary(), ack: m.ack.summary() },
       socketConnected,

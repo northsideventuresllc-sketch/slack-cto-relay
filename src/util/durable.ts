@@ -1,5 +1,5 @@
 // Durable-disk helpers: every write that matters is fsynced (D6 durable state).
-import { openSync, writeSync, fsyncSync, closeSync, renameSync, mkdirSync, existsSync, readFileSync, constants, chmodSync } from 'node:fs';
+import { openSync, writeSync, fsyncSync, closeSync, renameSync, mkdirSync, existsSync, readFileSync, constants, chmodSync, statSync, unlinkSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 export function ensureDir(path: string, mode = 0o700): void {
@@ -65,4 +65,22 @@ export function readJsonLines(path: string): { values: unknown[]; badLines: numb
     }
   }
   return { values, badLines };
+}
+
+export const ALERTS_MAX_BYTES = 1024 * 1024;
+export const ALERTS_KEEP = 3;
+
+/**
+ * Append to a size-capped log (alerts.jsonl, R7-NEW-5): past `maxBytes` the file
+ * is rotated by rename (path → path.1 → … → path.<keep>; the oldest is dropped),
+ * never truncated in place.
+ */
+export function appendLineCapped(path: string, line: string, maxBytes = ALERTS_MAX_BYTES, keep = ALERTS_KEEP, mode = 0o600): void {
+  if (existsSync(path) && statSync(path).size + Buffer.byteLength(line) + 1 > maxBytes) {
+    const oldest = `${path}.${keep}`;
+    if (existsSync(oldest)) unlinkSync(oldest);
+    for (let i = keep - 1; i >= 1; i--) if (existsSync(`${path}.${i}`)) renameSync(`${path}.${i}`, `${path}.${i + 1}`);
+    renameSync(path, `${path}.1`);
+  }
+  appendLineSync(path, line, mode);
 }

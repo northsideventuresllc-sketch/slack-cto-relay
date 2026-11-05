@@ -92,7 +92,9 @@ export type FireJournalState =
   | 'reply-posted'
   | 'link-posted'
   | 'lost-notified'
-  | 'closeout-requested';
+  | 'closeout-requested'
+  | 'retry-pending'
+  | 'retry-done';
 
 // ---------------------------------------------------------------------------
 // Harness adapter — HarnessAdapter v1
@@ -130,6 +132,9 @@ export interface HealthResponse {
   manualQueueLatencyMs: number | null; // manual adapters: fire -> claim; null until the first claim
   ackBreachCount: number;
   adapter: AdapterHealth;
+  // R7-FU-2: the two fields D6 says the health endpoint returns.
+  queueDepth: number; // non-terminal entries in this CTO's queue (max 10)
+  leaseState: 'none' | 'held' | 'lapsed' | 'lost'; // this program's brain lease state
 }
 
 export interface FireRequest {
@@ -150,6 +155,13 @@ export interface FireMeta {
 }
 
 export interface HarnessAdapter {
+  /**
+   * EXTENSION (KAR-6): true only if status() is a real live probe of the run in
+   * its harness. false = status() reads stored state (the brain row), so the
+   * still-active test's prong (a) does not apply to this adapter. Every v1
+   * adapter is false.
+   */
+  readonly liveStatus?: boolean;
   fire(req: FireRequest): Promise<{ runId: string; runChatUrl: string | null; status: FireStatus }>;
   status(runId: string): Promise<{ state: RunState; runChatUrl: string | null }>;
   cancel(runId: string): Promise<void>; // marks the run cancelled; for Muse, the brain row status becomes 'cancelled' and the drain skips it; for manual, the handoff record becomes 'cancelled'
