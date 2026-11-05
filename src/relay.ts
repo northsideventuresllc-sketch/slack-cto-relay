@@ -274,6 +274,10 @@ export class RelayProgram {
         core.d.quarantine.prune();
         this.log.info('nightly compaction', r);
       });
+      if (duties && cfg.mirrorDir) {
+        const archived = await duties.archiveOldRows(cfg.mirrorDir);
+        this.log.info('brain rows archived', { archived });
+      }
     });
     this.watchdog(alert);
     this.log.info('relay up', { cto: cto.key, epoch: lease.currentEpoch(), holder: cfg.holder });

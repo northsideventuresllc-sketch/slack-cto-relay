@@ -7,10 +7,13 @@ import { isPlaceholder, type CtoEntry, type Registry } from './config.js';
 import type { Poster } from './poster.js';
 import { T, isRelayTemplate } from './templates.js';
 import type { Logger } from './util/log.js';
+import { appendLineSync } from './util/durable.js';
+import { join } from 'node:path';
 import { DAY, HOUR, iso, type Clock } from './util/time.js';
 
 export const STALL_MS = 6 * HOUR;
 export const UNCLOSED_MS = 24 * HOUR;
+export const BRAIN_ROW_RETENTION_MS = 90 * DAY;
 
 /**
  * The still-active test (D5 close signal). A run is still active if ANY holds:
@@ -139,6 +142,31 @@ export class MuseDuties {
     const byId = new Map<string, string>(this.registry.ctos.map((c) => [c.key, c.displayName]));
     const stalled = this.findings.map((f) => `${byId.get(f.cto) ?? f.cto} fire id ${f.fireId}${f.kind === 'unclosed' ? ' (not closed after 24 hours)' : ''}`);
     await this.poster.post(this.registry.ctoBotsChannelId, T.dailyOpen(open, owed, pending, stalled), 'template');
+  }
+
+  /**
+   * Nightly: brain rows are retained 90 days, then archived to the vault (D6
+   * store table). Terminal start rows older than 90 days are exported to
+   * <mirrorDir>/brain-archive-<YYYY-MM>.jsonl (filed into the vault weekly with
+   * the mirror) and marked `archived_at`. Rows are NOT deleted from the brain:
+   * deletion after archive is a COUNCIL GATE decision.
+   */
+  async archiveOldRows(dir: string): Promise<number> {
+    const now = this.clock();
+    let n = 0;
+    for (const cto of this.ctos()) {
+      const rows = await this.brain.listFireRows(cto.agentName, ['closed', 'failed', 'expired', 'refused', 'cancelled']).catch(() => [] as FireRow[]);
+      for (const row of rows) {
+        const ev = relayEvidence(row);
+        const done = Date.parse(row.completed_at ?? row.fired_at ?? '');
+        if (!ev || ev.archived_at || !Number.isFinite(done) || now - done < BRAIN_ROW_RETENTION_MS) continue;
+        const month = iso(now).slice(0, 7);
+        appendLineSync(join(dir, `brain-archive-${month}.jsonl`), JSON.stringify(row), 0o640);
+        const ok = await this.brain.patchFireRow(row.id, { evidence: { ...ev, v: ev.v + 1, archived_at: iso(now) } }, { version: ev.v }).catch(() => null);
+        if (ok) n++;
+      }
+    }
+    return n;
   }
 
   /** Every minute: the visible failure for a sibling program that is down (e.g. its token was revoked). */

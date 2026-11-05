@@ -73,6 +73,7 @@ export const RelayEvidenceSchema = z.object({
     })
     .optional(),
   writer: z.string().optional(),
+  archived_at: z.string().optional(), // set once the row has been exported to the vault archive (90-day retention)
 });
 export type RelayEvidence = z.infer<typeof RelayEvidenceSchema>;
 

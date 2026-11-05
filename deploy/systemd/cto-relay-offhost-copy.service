@@ -1,0 +1,13 @@
+# /etc/systemd/system/cto-relay-offhost-copy.service
+# Nightly off-host copy of the journal and the run log (PLAN-v7 D6 durable
+# state), plus the hygiene check (checksum + record count). Runs as root so it
+# can read the four 0700 state directories.
+[Unit]
+Description=Slack CTO Loop — nightly off-host copy + hygiene check
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/cto-relay/offhost.env
+ExecStart=/usr/local/bin/cto-relay-offhost-copy.sh

@@ -64,6 +64,7 @@ const EnvSchema = z.object({
   CTO_RELAY_MIRROR_DIR: z.string().min(1).optional(),
   CTO_RELAY_HEALTH_BIND: z.string().min(1).optional(),
   SUPABASE_URL: z.string().url().optional(),
+  CTO_RELAY_KEY_DIR: z.string().min(1).optional(),
   CREDENTIALS_DIRECTORY: z.string().min(1).optional(),
   CTO_RELAY_LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
 });
@@ -142,7 +143,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RelayConfig {
     mirrorDir: isMuse ? (e.CTO_RELAY_MIRROR_DIR ?? join(stateDir, 'mirror')) : null,
     healthBind: e.CTO_RELAY_HEALTH_BIND ? e.CTO_RELAY_HEALTH_BIND.split(',').map((s) => s.trim()) : registry.healthBind,
     supabaseUrl: e.SUPABASE_URL ?? null,
-    credentialsDir: e.CREDENTIALS_DIRECTORY ?? null,
+    // The ExecStartPre tmpfs dir wins (fresh fetch on every start, D7); $CREDENTIALS_DIRECTORY is the fallback.
+    credentialsDir: e.CTO_RELAY_KEY_DIR ?? e.CREDENTIALS_DIRECTORY ?? null,
     logLevel: e.CTO_RELAY_LOG_LEVEL,
   };
 }

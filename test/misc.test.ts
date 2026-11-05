@@ -145,3 +145,18 @@ test('broker: a manual program reaches only its own rows and its own lease name'
   await assert.rejects(claude.upsertHeartbeat());
   server.stop();
 });
+
+test('brain rows: terminal rows older than 90 days are exported to the vault archive and marked, once', async () => {
+  const { MuseDuties } = await import('../src/sweep.js');
+  const clock = new FakeClock();
+  const brain = new FakeBrain(clock);
+  const reg = testRegistry();
+  const row = await brain.insertFireRow({ toAgent: 'MUSE', fromAgent: 'MUSE', toHarness: 'muse', subject: 's', body: 'task text', evidence: { v: 0, cto: 'muse', task_hash: 'h', norm_hash: 'n', epoch: 1 }, firedAt: new Date(clock.now()).toISOString() });
+  brain.rows.get(row.id)!.status = 'closed';
+  brain.rows.get(row.id)!.completed_at = new Date(clock.now()).toISOString();
+  clock.advance(91 * DAY);
+  const dir = mkdtempSync(join(tmpdir(), 'arch-'));
+  const d = new MuseDuties(brain, reg, {} as never, { history: async () => [] }, clock.now, silentLogger, () => undefined, async () => true);
+  assert.equal(await d.archiveOldRows(dir), 1);
+  assert.equal(await d.archiveOldRows(dir), 0);
+});

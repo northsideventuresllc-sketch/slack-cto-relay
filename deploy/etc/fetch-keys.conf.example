@@ -1,0 +1,21 @@
+# /etc/cto-relay/fetch-keys.conf  (root:root 0600) — LABELS ONLY, never values.
+#
+# VAULT_GET: a command that takes one argument (the Secure Vault label), reads
+# the vault-cli-machine token from the file in $VAULT_TOKEN_FILE, and prints
+# only the secret value on stdout.
+# PLACEHOLDER — the Secure Vault CLI command is not recorded in PLAN-v7 or the
+# runbook. Muse CTO fills this in at deploy time.
+VAULT_GET="<VAULT_GET_COMMAND>"
+
+# Secure Vault labels. The brain key label is cto-relay-muse (PLAN-v7 D4/D7).
+# Slack token labels are not recorded in PLAN-v7 or the runbook: fill them in
+# from the Secure Vault labels list (Phase 1 / proof pack).
+LABEL_MUSE_BRAIN_KEY="cto-relay-muse"
+LABEL_MUSE_SLACK_APP_TOKEN="<LABEL_MUSE_SLACK_APP_TOKEN>"
+LABEL_MUSE_SLACK_BOT_TOKEN="<LABEL_MUSE_SLACK_BOT_TOKEN>"
+LABEL_CLAUDE_SLACK_APP_TOKEN="<LABEL_CLAUDE_SLACK_APP_TOKEN>"
+LABEL_CLAUDE_SLACK_BOT_TOKEN="<LABEL_CLAUDE_SLACK_BOT_TOKEN>"
+LABEL_GEMINI_SLACK_APP_TOKEN="<LABEL_GEMINI_SLACK_APP_TOKEN>"
+LABEL_GEMINI_SLACK_BOT_TOKEN="<LABEL_GEMINI_SLACK_BOT_TOKEN>"
+LABEL_AXON_HERMES_SLACK_APP_TOKEN="<LABEL_AXON_HERMES_SLACK_APP_TOKEN>"
+LABEL_AXON_HERMES_SLACK_BOT_TOKEN="<LABEL_AXON_HERMES_SLACK_BOT_TOKEN>"

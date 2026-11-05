@@ -1,0 +1,10 @@
+# /etc/systemd/system/cto-relay-offhost-copy.timer — nightly at 02:30 local.
+[Unit]
+Description=Slack CTO Loop — nightly off-host copy
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
