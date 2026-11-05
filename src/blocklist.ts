@@ -78,7 +78,7 @@ const MENTION = String.raw`<@[A-Z0-9]+(?:\|[^>]*)?>`;
 
 /** Plain-text CTO names, as a CTO might type them before the poster turns them into mentions. */
 export function plainNamePattern(ctos: CtoEntry[]): string {
-  const names = ctos.map((c) => c.displayName.replace(/[.*+?^${}()|[\]\\-]/g, (m) => '\\' + m));
+  const names = ctos.map((c) => c.displayName.replace(/[.*+?^${}()|[\]\\]/g, (m) => '\\' + m));
   return `@(?:${names.join('|')})`;
 }
 
@@ -102,7 +102,7 @@ export function toRealMentions(text: string, ctos: CtoEntry[]): string {
   let out = text;
   const sorted = [...ctos].sort((a, b) => b.displayName.length - a.displayName.length);
   for (const c of sorted) {
-    const esc = c.displayName.replace(/[.*+?^${}()|[\]\\-]/g, (m) => '\\' + m);
+    const esc = c.displayName.replace(/[.*+?^${}()|[\]\\]/g, (m) => '\\' + m);
     out = out.replace(new RegExp(`@${esc}\\b`, 'g'), `<@${c.botUserId}>`);
   }
   return out;

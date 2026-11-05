@@ -62,6 +62,7 @@ export interface CoreDeps {
   blocklist: Blocklist;
   alert: (code: string, ids?: Record<string, string | number | null>) => void;
   schedule?: (ms: number, fn: () => void) => void;
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export interface StartContext {
@@ -151,7 +152,7 @@ export class RelayCore {
   }
 
   private sleep(ms: number): Promise<void> {
-    return new Promise((r) => setTimeout(r, ms));
+    return this.d.sleep ? this.d.sleep(ms) : new Promise((r) => setTimeout(r, ms));
   }
 
   /** Start-pattern events: never quarantined; failure reply + alert, one retry after 1 hour, capped at one. */
