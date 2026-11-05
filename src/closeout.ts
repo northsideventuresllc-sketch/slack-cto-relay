@@ -12,6 +12,8 @@ import type { Outbox, OutboxEntry } from './outbox.js';
 import { T, clampWords } from './templates.js';
 import { parseSessionLog, safeVaultPath, type VaultReader } from './vault.js';
 import { sha256 } from './util/hash.js';
+import type { Serialize } from './maintenance.js';
+import type { ReadBack } from './vault.js';
 import { iso } from './util/time.js';
 
 export interface CloseoutRequest {
@@ -28,10 +30,19 @@ export class Closeouts {
     private readonly outbox: Outbox,
     private readonly vault: VaultReader,
     private readonly caps: CostEnvelope,
+    /** The event lane. The slow vault read-back runs OUTSIDE it; posting and recording run inside it. */
+    private readonly serialize: Serialize = (fn) => fn(),
   ) {}
 
-  /** Muse CTO hands in a close-out (control socket). Queues it durably, then tries at once. */
-  async request(req: CloseoutRequest): Promise<{ ok: boolean; reason: string }> {
+  /** Request + first attempt (the read-back runs outside the lane). */
+  async submit(req: CloseoutRequest): Promise<{ ok: boolean; reason: string }> {
+    const r = await this.serialize(() => this.request(req));
+    if (!r.entry) return { ok: r.ok, reason: r.reason };
+    return (await this.attempt(r.entry)) ? { ok: true, reason: 'posted' } : { ok: true, reason: 'queued-in-outbox' };
+  }
+
+  /** Muse CTO hands in a close-out (control socket). Validates and queues it durably; call attempt() next, outside the lane. */
+  async request(req: CloseoutRequest): Promise<{ ok: boolean; reason: string; entry?: OutboxEntry }> {
     const d = this.core.d;
     const e = d.book.resolveQuoted(req.fireId);
     if (!e || e.provisional) return { ok: false, reason: 'unknown-fire' };
@@ -67,15 +78,14 @@ export class Closeouts {
       stillOpen: null,
     };
     this.outbox.put(entry);
-    const done = await this.attempt(entry);
-    return done ? { ok: true, reason: 'posted' } : { ok: true, reason: 'queued-in-outbox' };
+    return { ok: true, reason: 'queued', entry };
   }
 
   /** Drain due outbox entries (scheduler, every minute). */
   async drain(): Promise<void> {
     const now = this.core.d.clock();
     const entries = this.outbox.list();
-    for (const fireId of this.outbox.corruptOnLoad) await this.rebuild(fireId);
+    for (const fireId of this.outbox.corruptOnLoad) await this.serialize(() => this.rebuild(fireId));
     for (const e of entries) if (Date.parse(e.nextAttemptAt) <= now) await this.attempt(e);
   }
 
@@ -114,18 +124,23 @@ export class Closeouts {
 
   /** One attempt. Returns true when the map and the pointer are both posted. */
   async attempt(entry: OutboxEntry): Promise<boolean> {
+    // Slow part first, outside the lane: fetch the vault and read the log back.
+    const rb: ReadBack | null = entry.step === 'readback' ? await this.vault.readBack(entry.vaultLogPath) : null;
+    return this.serialize(() => this.postAndFinish(entry, rb));
+  }
+
+  private async postAndFinish(entry: OutboxEntry, rb: ReadBack | null): Promise<boolean> {
     const d = this.core.d;
     const fire = d.book.get(entry.fireId);
     if (!fire || fire.terminal) {
       this.outbox.remove(entry.fireId);
       return false;
     }
-    let cur = entry;
+    let cur = this.outbox.get(entry.fireId) ?? entry;
     if (cur.step === 'readback') {
-      const rb = await this.vault.readBack(cur.vaultLogPath);
-      if (!rb.ok || !rb.bytes || !rb.hash) {
-        d.log.warn('close-out read-back failed; map held in outbox', { fireId: cur.fireId, reason: rb.reason ?? 'unknown' });
-        if (cur.attempts === 0) d.alert('closeout-readback-failed', { fireId: cur.fireId, reason: rb.reason ?? 'unknown' });
+      if (!rb || !rb.ok || !rb.bytes || !rb.hash) {
+        d.log.warn('close-out read-back failed; map held in outbox', { fireId: cur.fireId, reason: rb?.reason ?? 'unknown' });
+        if (cur.attempts === 0) d.alert('closeout-readback-failed', { fireId: cur.fireId, reason: rb?.reason ?? 'unknown' });
         const next = this.outbox.failAttempt(cur, d.clock());
         if (!next) d.alert('closeout-outbox-expired', { fireId: cur.fireId });
         return false;

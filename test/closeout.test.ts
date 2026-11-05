@@ -37,7 +37,7 @@ async function linkedRun(cto: 'muse' | 'claude' = 'claude') {
 
 test('close-out: read-back matches → full map in the CTO channel, then the pointer in #cto-bots; row closed; lock released', async () => {
   const { h, id, co } = await linkedRun('claude');
-  const res = await co.request({ fireId: id, vaultLogPath: 'Sector/Session Logs/2026-11-05-x.md', sessionUrl: null, tokens: 1200, minutes: 30 });
+  const res = await co.submit({ fireId: id, vaultLogPath: 'Sector/Session Logs/2026-11-05-x.md', sessionUrl: null, tokens: 1200, minutes: 30 });
   assert.deepEqual(res, { ok: true, reason: 'posted' });
   const claude = ctoEntry(h.registry, 'claude');
   const map = h.sender.posts.at(-2)!;
@@ -60,7 +60,7 @@ test('close-out: no read-back → nothing claiming completion is posted; the map
   const { h, id, vault, outbox, co } = await linkedRun('claude');
   vault.ok = false;
   const before = h.sender.posts.length;
-  const res = await co.request({ fireId: id, vaultLogPath: 'x/log.md', sessionUrl: null, tokens: null, minutes: null });
+  const res = await co.submit({ fireId: id, vaultLogPath: 'x/log.md', sessionUrl: null, tokens: null, minutes: null });
   assert.deepEqual(res, { ok: true, reason: 'queued-in-outbox' });
   assert.equal(h.sender.posts.length, before);
   assert.ok(h.alerts.includes('closeout-readback-failed'));
@@ -75,7 +75,7 @@ test('close-out: no read-back → nothing claiming completion is posted; the map
 
 test('close-out over the token budget: flagged, and the next start for that CTO is refused until the Monday review', async () => {
   const { h, id, co } = await linkedRun('claude');
-  await co.request({ fireId: id, vaultLogPath: 'x/log.md', sessionUrl: null, tokens: 30_000, minutes: 10 });
+  await co.submit({ fireId: id, vaultLogPath: 'x/log.md', sessionUrl: null, tokens: 30_000, minutes: 10 });
   await h.advance(31 * MIN);
   await h.core.handleEvent(mention(h, 'claude', 'fire: next'));
   assert.match(h.sender.texts().at(-1)!, /Starts resume after the Monday review/);
@@ -88,7 +88,7 @@ test('close-out without any session link is refused (no map ever carries a null 
   const h = await makeHarness('claude');
   await h.core.handleEvent(mention(h, 'claude', 'fire: x'));
   const co = new Closeouts(h.core, new Outbox(h.dir), new FakeVault(), h.core.d.caps);
-  assert.deepEqual(await co.request({ fireId: h.brain.insertOrder[0]!, vaultLogPath: 'a/b.md', sessionUrl: null, tokens: null, minutes: null }), { ok: false, reason: 'no-session-link' });
+  assert.deepEqual(await co.submit({ fireId: h.brain.insertOrder[0]!, vaultLogPath: 'a/b.md', sessionUrl: null, tokens: null, minutes: null }), { ok: false, reason: 'no-session-link' });
 });
 
 test('outbox schedule: 5 minutes × 12, then hourly × 24, then done', () => {

@@ -194,9 +194,10 @@ export class RelayProgram {
       blocklist,
       alert,
     });
-    const maintenance = new Maintenance(core);
+    const serialize = <T,>(fn: () => Promise<T>): Promise<T> => this.lane.run(fn);
+    const maintenance = new Maintenance(core, serialize);
     const outbox = new Outbox(cfg.stateDir);
-    const closeouts = new Closeouts(core, outbox, new GitVaultReader(cfg.vaultDir, cfg.vaultWebBase), core.d.caps);
+    const closeouts = new Closeouts(core, outbox, new GitVaultReader(cfg.vaultDir, cfg.vaultWebBase), core.d.caps, serialize);
 
     this.health = new HealthServer({
       cto: cto.key,
@@ -244,15 +245,17 @@ export class RelayProgram {
             this.log.warn('mirror write failed', { eventId: ev.eventId || null });
           }
         }
-        void this.lane.run(() => core.handleEvent(ev)).catch((err) => this.log.error('event lane error', { err: errorCode(err) }));
+        const receivedAt = this.clock();
+        void this.lane.run(() => core.handleEvent(ev, receivedAt)).catch((err) => this.log.error('event lane error', { err: errorCode(err) }));
       }
     })();
 
     // Timers.
-    this.every(MIN, () => this.lane.run(() => maintenance.timers()));
-    this.every(MIN, () => this.lane.run(() => closeouts.drain()));
-    this.every(5 * MIN, () => this.lane.run(() => maintenance.pollRows()));
-    this.every(30 * MIN, () => this.lane.run(() => maintenance.reconcile()));
+    // Periodic jobs take the lane per entry (inside Maintenance/Closeouts), never for a whole job.
+    this.every(MIN, () => maintenance.timers());
+    this.every(MIN, () => closeouts.drain());
+    this.every(5 * MIN, () => maintenance.pollRows());
+    this.every(30 * MIN, () => maintenance.reconcile());
     if (duties) {
       const d = duties;
       this.every(MIN, () => d.watchSiblings());
@@ -263,7 +266,7 @@ export class RelayProgram {
         await duties.clearStalledLocks();
         await duties.sweep();
       }
-      await this.lane.run(() => maintenance.pollRows());
+      await maintenance.pollRows();
       await this.lane.run(() => maintenance.nineAm());
       if (duties) await duties.dailyOpen();
     });
@@ -293,8 +296,13 @@ export class RelayProgram {
         return core.setLink(c.fireId, c.link);
       case 'stopped':
         return core.markStopped(c.fireId);
-      case 'closeout':
-        return closeouts.request({ fireId: c.fireId, vaultLogPath: c.vaultLogPath, sessionUrl: c.sessionUrl, tokens: c.tokens, minutes: c.minutes });
+      case 'closeout': {
+        // Validate + queue durably inside the lane; the vault read-back and posting follow outside it.
+        const r = await closeouts.request({ fireId: c.fireId, vaultLogPath: c.vaultLogPath, sessionUrl: c.sessionUrl, tokens: c.tokens, minutes: c.minutes });
+        const entry = r.entry;
+        if (entry) setImmediate(() => void closeouts.attempt(entry).catch((err) => this.log.error('close-out attempt failed', { err: errorCode(err) })));
+        return { ok: r.ok, reason: r.ok ? 'queued; the map posts after the vault read-back matches' : r.reason };
+      }
       case 'review-clear':
         core.reviewClear();
         return { ok: true };

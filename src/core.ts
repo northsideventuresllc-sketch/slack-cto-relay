@@ -124,8 +124,9 @@ export class RelayCore {
    * retried in-process with the 1/2/4/8 s backoff up to 5 attempts; then it is
    * quarantined — except start-pattern events, which are exempt (see quarantine.ts).
    */
-  async handleEvent(ev: SlackEvent): Promise<void> {
-    const receivedAt = this.now();
+  async handleEvent(ev: SlackEvent, receivedAtSocket?: number): Promise<void> {
+    // Ack latency is measured from socket receipt, so time spent waiting in the lane counts.
+    const receivedAt = receivedAtSocket ?? this.now();
     const evKey = eventKey(ev, receivedAt);
     const isStartIngress = ev.ingress === 'app_mention' || ev.ingress === 'slash_command';
     for (let attempt = 1; attempt <= MAX_EVENT_FAILURES; attempt++) {

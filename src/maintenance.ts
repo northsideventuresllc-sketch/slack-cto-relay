@@ -20,8 +20,17 @@ import type { FireEntry } from './firebook.js';
 import { T } from './templates.js';
 import { iso } from './util/time.js';
 
+export type Serialize = <T>(fn: () => Promise<T>) => Promise<T>;
+
+/**
+ * The periodic jobs walk entries OUTSIDE the event lane and take the lane once
+ * per entry, so a Slack event never waits behind a whole job (the <3 s reply).
+ */
 export class Maintenance {
-  constructor(private readonly core: RelayCore) {}
+  constructor(
+    private readonly core: RelayCore,
+    private readonly serialize: Serialize = (fn) => fn(),
+  ) {}
 
   private get d() {
     return this.core.d;
@@ -59,21 +68,26 @@ export class Maintenance {
     const now = d.clock();
     // (a) journal records with no matching brain row
     for (const e of d.book.inFlight()) {
-      if (e.provisional) {
-        if (e.heldTask === null && !e.lostNotified) await this.lost(e);
-        continue;
-      }
-      let row: FireRow | null;
-      try {
-        row = await d.brain.getFireRow(e.id);
-      } catch {
-        return; // brain down: try again next round
-      }
-      if (!row) {
-        if (!e.lostNotified) await this.lost(e);
-        continue;
-      }
-      await this.core.syncFromRow(e, row);
+      const brainDown = await this.serialize(async () => {
+        if (e.terminal) return false;
+        if (e.provisional) {
+          if (e.heldTask === null && !e.lostNotified) await this.lost(e);
+          return false;
+        }
+        let row: FireRow | null;
+        try {
+          row = await d.brain.getFireRow(e.id);
+        } catch {
+          return true; // brain down: try again next round
+        }
+        if (!row) {
+          if (!e.lostNotified) await this.lost(e);
+          return false;
+        }
+        await this.core.syncFromRow(e, row);
+        return false;
+      });
+      if (brainDown) return;
     }
     // (b) brain rows with no journal entry (journal-failure orphans)
     let rows: FireRow[];
@@ -83,13 +97,21 @@ export class Maintenance {
       return;
     }
     for (const row of rows) {
-      if (d.book.get(row.id)) continue;
+      await this.serialize(() => this.orphan(row, now));
+    }
+  }
+
+  /** One brain row with no journal entry → `failed`, and the requester is told. */
+  private async orphan(row: FireRow, now: number): Promise<void> {
+    const d = this.d;
+    {
+      if (d.book.get(row.id)) return;
       const fired = Date.parse(row.fired_at ?? row.created_at ?? '');
-      if (Number.isFinite(fired) && now - fired < ORPHAN_GRACE_MS) continue; // a write may be in flight
+      if (Number.isFinite(fired) && now - fired < ORPHAN_GRACE_MS) return; // a write may be in flight
       const ev = relayEvidence(row);
-      if (ev && d.journal.all().some((r) => r.idemKey === ev.idem_key && r.kind === 'fire-request')) continue; // provisional mapped elsewhere
+      if (ev && d.journal.all().some((r) => r.idemKey === ev.idem_key && r.kind === 'fire-request')) return; // provisional mapped elsewhere
       const patched = await d.brain.patchFireRow(row.id, { status: 'failed', completed_at: iso(now) }, { statusIn: ['queued', 'claimed', 'started'] }).catch(() => null);
-      if (!patched) continue;
+      if (!patched) return;
       d.alert('journal-orphan-failed', { fireId: row.id });
       const channel = ev?.slack?.channel_id;
       if (channel && this.core.channels.has(channel)) await d.poster.post(channel, T.orphanFailed(row.id), 'template', row.id);
@@ -109,19 +131,27 @@ export class Maintenance {
     const d = this.d;
     for (const e of d.book.inFlight()) {
       if (e.provisional) continue;
-      const row = await d.brain.getFireRow(e.id).catch(() => null);
-      if (row) await this.core.syncFromRow(e, row);
+      await this.serialize(async () => {
+        if (e.terminal) return;
+        const row = await d.brain.getFireRow(e.id).catch(() => null);
+        if (row) await this.core.syncFromRow(e, row);
+      });
     }
   }
 
   /** Every minute: held brain-down retries, link window, claim limit, 24-hour expiry. */
   async timers(): Promise<void> {
+    for (const e of this.d.book.inFlight()) await this.serialize(() => this.timerFor(e));
+  }
+
+  private async timerFor(e: FireEntry): Promise<void> {
     const d = this.d;
     const now = d.clock();
-    for (const e of d.book.inFlight()) {
+    {
+      if (e.terminal) return;
       if (e.provisional) {
         await this.core.retryHeld(e);
-        continue;
+        return;
       }
       const age = now - e.acceptedAt;
       const unclaimed = e.claimAt === null;
@@ -132,7 +162,7 @@ export class Maintenance {
           d.runlog.write({ kind: 'expiry', fireId: e.id, writer: 'relay', reason: 'unclaimed-24h' });
           await d.poster.post(e.channelId, T.expired(), 'template', e.id);
         }
-        continue;
+        return;
       }
       if (d.cto.adapter === 'automatic-muse') {
         if (!e.linkPosted && age >= MUSE_LINK_WINDOW_MS && !e.noticesSent.has('link-window')) {
