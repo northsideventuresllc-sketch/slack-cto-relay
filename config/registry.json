@@ -1,0 +1,81 @@
+{
+  "$comment": "CTO registry — the single source for which adapter serves which CTO (PLAN-v7 D6). IDs from RUNBOOK.md Phase 1 verification (2026-11-05). Values in <ANGLE_BRACKETS> are placeholders: the relay refuses to start while any placeholder remains. The four private CTO channels are created in Phase 3; record their ids here then.",
+  "workspace": {
+    "teamId": "T0CDTE2JR0B",
+    "domain": "northsidevent-jtb2955.slack.com"
+  },
+  "ctoBotsChannelId": "C0CEU7SMCHE",
+  "jbUserId": "U0CDUC7UEP7",
+  "allowlist": {
+    "$comment": "Authors allowed to start work. Default: the four CTO bot user ids only. JB's id is recorded above for the future membership step and is NOT in the allowlist (Phase 1 exit rule).",
+    "extraAuthorIds": []
+  },
+  "healthBind": ["127.0.0.1", "198.19.0.2"],
+  "ctos": [
+    {
+      "key": "muse",
+      "displayName": "Muse CTO",
+      "appId": "A0CEU4GCVPS",
+      "botUserId": "U0CDXQM4FUN",
+      "adapter": "automatic-muse",
+      "agentName": "MUSE",
+      "channelId": "<CTO_MUSE_CHANNEL_ID>",
+      "channelName": "cto-muse",
+      "command": "/fire-muse",
+      "healthPort": 9101,
+      "home": "the Muse app",
+      "runLinkForm": "https://muse.ai/chat/<run-id>"
+    },
+    {
+      "key": "claude",
+      "displayName": "Claude CTO",
+      "appId": "A0CDTGZHW2X",
+      "botUserId": "U0CDJCQ3K3R",
+      "adapter": "manual",
+      "agentName": "CLAUDE",
+      "channelId": "<CTO_CLAUDE_CHANNEL_ID>",
+      "channelName": "cto-claude",
+      "command": "/fire-claude",
+      "healthPort": 9102,
+      "home": "Claude Code",
+      "runLinkForm": "Claude Code session link"
+    },
+    {
+      "key": "gemini",
+      "displayName": "Gemini CTO",
+      "appId": "A0CDZJJF2FL",
+      "botUserId": "U0CDJCXHW0P",
+      "adapter": "manual",
+      "agentName": "<GEMINI_AGENT_NAME>",
+      "channelId": "<CTO_GEMINI_CHANNEL_ID>",
+      "channelName": "cto-gemini",
+      "command": "/fire-gemini",
+      "healthPort": 9103,
+      "home": "Antigravity",
+      "runLinkForm": "mini session name + Slack thread"
+    },
+    {
+      "key": "axon-hermes",
+      "displayName": "AXON-Hermes CTO",
+      "appId": "A0CDXR7766A",
+      "botUserId": "U0CDXRAETNJ",
+      "adapter": "manual",
+      "agentName": "<AXON_HERMES_AGENT_NAME>",
+      "channelId": "<CTO_AXON_HERMES_CHANNEL_ID>",
+      "channelName": "cto-axon-hermes",
+      "command": "/fire-axon-hermes",
+      "healthPort": 9104,
+      "home": "the AXON-Hermes chat",
+      "runLinkForm": "AXON-Hermes chat link"
+    }
+  ],
+  "caps": {
+    "$comment": "Phase 0 fallback numbers (RUNBOOK Phase 0). The lower binds.",
+    "perFireTokenBudget": 25000,
+    "dailyStartCapTotal": 1,
+    "monthlyStartCapTotal": 24,
+    "perCtoWeeklyManualCap": 10,
+    "manualMinutesPerStart": 15,
+    "dailyManualMinutesCeiling": 60
+  }
+}
