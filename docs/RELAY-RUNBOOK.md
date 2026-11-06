@@ -64,9 +64,9 @@ Fill these in. Do not guess them. Every value below either has its real value he
    - `MUSE`: verified from a live row;
    - `Claude CTO`: confirmed by JB (live rows carry it; PLAN-v7 D7 wrote `CLAUDE`);
    - `Gemini CTO`: seen in live rows;
-   - `AXON-Hermes CTO`: matches the Slack bot name.
+   - `AXON-Hermes CTO`: set by COUNCIL GATE round 1, confirmed by JB (matches the Slack bot name).
 
-   Before the first deploy, check `AXON-Hermes CTO` against a live `agent_comms` row or the harness roster. A wrong name fails loudly at the broker's `toAgent` match.
+   All four names are confirmed. A wrong name would fail loudly at the broker's `toAgent` match, never misroute silently.
 3. **`/etc/cto-relay/fetch-keys.conf` — `VAULT_GET`** (C2-FU-1).
    - **The interface is fixed.** One argument (the vault label). It reads the machine token from the file in `$VAULT_TOKEN_FILE` (`/etc/cto-relay/vault-token`) and prints only the value on stdout.
    - **The concrete command string is TO RECORD.** It is not in PLAN-v7, the setup RUNBOOK, or this repo, and no Secure Vault CLI exists in the workspace to check one against, so it is not guessed here.
