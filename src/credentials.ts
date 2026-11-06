@@ -1,6 +1,9 @@
-// Keys arrive as systemd credentials: ExecStartPre (`cto-relay-fetch-keys <cto>`)
-// fetches them fresh from the Secure Vault into tmpfs on every start, and
-// LoadCredential hands them to the process via $CREDENTIALS_DIRECTORY (D7).
+// Keys arrive through tmpfs: ExecStartPre (`cto-relay-fetch-keys <cto>`) fetches
+// them fresh from the Secure Vault into /run/credentials/cto-relay-<cto>/ on
+// every start, and the unit passes that directory to the process as
+// CTO_RELAY_KEY_DIR (D7). No unit uses `LoadCredential=` — systemd loads those
+// before ExecStartPre runs, which would break "fresh fetch wins" (KAR-FU-3).
+// $CREDENTIALS_DIRECTORY is read only as a fallback when CTO_RELAY_KEY_DIR is unset.
 // Values are never logged, never written anywhere else.
 
 import { readFileSync, existsSync } from 'node:fs';

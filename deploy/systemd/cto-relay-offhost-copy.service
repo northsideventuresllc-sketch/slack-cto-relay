@@ -10,4 +10,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/cto-relay/offhost.env
+# C2-FU-2: the vault WRITE deploy key (label cto-relay-vault-write), fetched fresh into tmpfs per run.
+ExecStartPre=/usr/local/bin/cto-relay-fetch-keys offhost
 ExecStart=/usr/local/bin/cto-relay-offhost-copy.sh
+ExecStopPost=/usr/local/bin/cto-relay-fetch-keys --wipe offhost

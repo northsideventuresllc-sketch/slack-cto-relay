@@ -50,9 +50,19 @@ export class Breaker {
     const w = this.currentWindow(normHash, nowMs);
     if (!w || w.count < BREAKER_MAX_ATTEMPTS) return { kind: 'ok' };
     const key = `${normHash}|${w.start}`;
-    const replyOnce = !this.replied.has(key);
+    // OPT-FU-4: the single trip reply is persisted as a hash-only `breaker-replied` journal
+    // record, so a restart inside the window does not send it again.
+    const repliedId = `breaker-${normHash.slice(0, 16)}-${w.start}`;
+    const already = this.replied.has(key) || this.journal.all().some((r) => r.kind === 'fire-state' && r.state === 'breaker-replied' && r.fireId === repliedId);
     this.replied.add(key);
-    return { kind: 'tripped', replyOnce };
+    if (!already) {
+      try {
+        this.journal.append({ kind: 'fire-state', fireId: repliedId, hash: normHash, cto: this.cto, state: 'breaker-replied' });
+      } catch {
+        // journal unavailable: fall back to the in-memory flag for this process
+      }
+    }
+    return { kind: 'tripped', replyOnce: !already };
   }
 
   /** Append the breaker-count record for an ACCEPTED attempt. */

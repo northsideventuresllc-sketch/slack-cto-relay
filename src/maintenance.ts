@@ -118,7 +118,7 @@ export class Maintenance {
     // (b) brain rows with no journal entry (journal-failure orphans)
     let rows: FireRow[];
     try {
-      rows = await d.brain.listFireRows(d.cto.agentName, ['queued', 'claimed', 'started']);
+      rows = await d.brain.listFireRows(d.cto.agentName, ['queued', 'claimed', 'started', 'linked']); // OPT-FU-2: `linked` too
     } catch {
       return;
     }
@@ -136,7 +136,7 @@ export class Maintenance {
       if (Number.isFinite(fired) && now - fired < ORPHAN_GRACE_MS) return; // a write may be in flight
       const ev = relayEvidence(row);
       if (ev && d.journal.all().some((r) => r.idemKey === ev.idem_key && r.kind === 'fire-request')) return; // provisional mapped elsewhere
-      const patched = await d.brain.patchFireRow(row.id, { status: 'failed', completed_at: iso(now) }, { statusIn: ['queued', 'claimed', 'started'] }).catch(() => null);
+      const patched = await d.brain.patchFireRow(row.id, { status: 'failed', completed_at: iso(now) }, { statusIn: ['queued', 'claimed', 'started', 'linked'] }).catch(() => null);
       if (!patched) return;
       d.alert('journal-orphan-failed', { fireId: row.id });
       const channel = ev?.slack?.channel_id;

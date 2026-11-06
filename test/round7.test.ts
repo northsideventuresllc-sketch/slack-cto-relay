@@ -111,6 +111,7 @@ test('R7-NEW-6: 3 accepted attempts trip the breaker; the 4th is refused and NOT
     await h.advance(MIN);
   }
   await h.core.handleEvent(mention(h, 'muse', 'fire: same'));
+  assert.equal(h.sender.texts().at(-1), 'Too many starts for this task. Stopped.', 'KAR-FU-5: the 4th attempt gets the refusal reply');
   assert.equal(h.brain.rows.size, 3);
   assert.equal(h.journal.all().filter((r) => r.kind === 'breaker-count').length, 3, 'the refused 4th is not recorded');
 });

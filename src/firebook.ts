@@ -113,6 +113,7 @@ export class FireBook {
       case 'closeout-requested':
       case 'retry-pending':
       case 'retry-done':
+      case 'breaker-replied':
         return;
       default:
         break;

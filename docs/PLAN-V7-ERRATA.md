@@ -146,3 +146,11 @@ Items the build fixed in code are listed in the PR body, not here, except where 
 - **R7-FU-25.** Header: replace "This v7 fixes all 21 round-7 ship-blockers" with:
 
   > This v7 fully fixes 16 of the 21 round-7 ship-blockers; 5 remain partial and are carried into the build.
+
+## Setup RUNBOOK.md correction (COUNCIL GATE round 1, ECO-FU-1)
+
+The setup runbook (`slack-cto-setup/RUNBOOK.md`, not in this repo) has a stale figure in its Phase 0 table, line 17. It shows the ceiling in dollars as "~$0.006 / month" at the Power rate. Phase 1 verified that JB is on Maximum. Replace the row in place:
+
+> | Monthly ceiling, dollars | ~$0.005 / month | 600,000 × $0.78 ÷ 100,000,000 = $0.00468 ≈ $0.005 (Maximum rate, verified Phase 1; was $0.006 at the Power rate) |
+
+The token ceiling and the count caps are unchanged.

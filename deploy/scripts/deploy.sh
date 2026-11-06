@@ -35,8 +35,10 @@ fi
 [ -f /etc/cto-relay/relay.env ] || install -m 0644 "$src/deploy/etc/relay.env.example" /etc/cto-relay/relay.env
 [ -f /etc/cto-relay/fetch-keys.conf ] || install -m 0600 "$src/deploy/etc/fetch-keys.conf.example" /etc/cto-relay/fetch-keys.conf
 [ -f /etc/cto-relay/offhost.env ] || install -m 0600 "$src/deploy/etc/offhost.env.example" /etc/cto-relay/offhost.env
-if grep -q '<[A-Z_]*>' /etc/cto-relay/relay.env /etc/cto-relay/fetch-keys.conf; then
-  echo "WARNING: /etc/cto-relay/relay.env or fetch-keys.conf still has <PLACEHOLDER> values — fill them before starting." >&2
+# C2-FU-11: every config file the services read, any-case placeholders (<UPPER>, <lower>, <Mixed_Case>).
+placeholder_files="/etc/cto-relay/relay.env /etc/cto-relay/fetch-keys.conf /etc/cto-relay/offhost.env $src/config/registry.json $src/deploy/sudoers/cto-relay"
+if grep -n -E '<[A-Za-z][A-Za-z0-9_-]*>' $placeholder_files; then
+  echo "WARNING: the lines above still hold <PLACEHOLDER> values — fill them before starting (runbook §2). The services refuse to start while they remain." >&2
 fi
 
 # Code
@@ -45,6 +47,9 @@ rsync -a --delete --exclude node_modules --exclude dist --exclude .git "$src/" /
 chown -R root:root /opt/cto-relay
 install -m 0755 "$src/deploy/scripts/cto-relay-fetch-keys" /usr/local/bin/cto-relay-fetch-keys
 install -m 0755 "$src/deploy/scripts/cto-relay-offhost-copy.sh" /usr/local/bin/cto-relay-offhost-copy.sh
+# GitHub's SSH host keys for the vault deploy keys: pin them, then CHECK the fingerprints
+# against GitHub's published list (docs.github.com, "GitHub's SSH key fingerprints") before use.
+[ -f /etc/cto-relay/known_hosts ] || { ssh-keyscan -t ed25519,ecdsa,rsa github.com > /etc/cto-relay/known_hosts 2>/dev/null && chmod 0644 /etc/cto-relay/known_hosts && ssh-keygen -lf /etc/cto-relay/known_hosts; }
 printf '#!/bin/sh\nexec /usr/bin/node /opt/cto-relay/dist/index.js "$@"\n' > /usr/local/bin/cto-relay && chmod 0755 /usr/local/bin/cto-relay
 
 # Units + runtime dirs

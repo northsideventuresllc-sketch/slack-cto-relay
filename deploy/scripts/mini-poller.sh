@@ -5,7 +5,7 @@
 # come from that user's login keychain and reach the poller on stdin only.
 set -euo pipefail
 brain=$(security find-generic-password -s "cto-relay-muse" -w)
-bot=$(security find-generic-password -s "<KEYCHAIN_ITEM_SLACK_BOT_TOKEN>" -w 2>/dev/null || true)
+bot=$(security find-generic-password -s "cto-relay-muse-slack-bot" -w 2>/dev/null || true)
 # shellcheck source=/dev/null
 [ -f /etc/cto-relay/relay.env ] && set -a && . /etc/cto-relay/relay.env && set +a
 export CTO_RELAY_VM_LAN="${CTO_RELAY_VM_LAN:-198.19.0.2}"

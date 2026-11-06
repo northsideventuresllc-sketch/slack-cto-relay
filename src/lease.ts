@@ -36,6 +36,7 @@ export class LeaseManager {
   private missed = 0;
   private lastHeartbeatMs: number | null = null;
   private timer: NodeJS.Timeout | null = null;
+  private lastLiveOkMs: number | null = null;
 
   constructor(
     private readonly brain: BrainApi,
@@ -141,12 +142,18 @@ export class LeaseManager {
     if (!this.canAct() || this.epoch === null) return false;
     const row = await this.brain.getLease(this.name);
     const ok = !!row && row.epoch === this.epoch && row.holder === this.holder;
+    if (ok) this.lastLiveOkMs = this.clock();
     if (!ok) {
       this.state = 'lost';
       this.log.error('stale epoch on live check', { lease: this.name, epoch: this.epoch, rowEpoch: row?.epoch ?? null });
       this.onAlert('lease-stale-epoch');
     }
     return ok;
+  }
+
+  /** True if a live lease read confirmed our epoch within the last `ms` (lets a short reply reuse the fire's own live check). */
+  recentlyVerified(ms: number): boolean {
+    return this.canAct() && this.lastLiveOkMs !== null && this.clock() - this.lastLiveOkMs <= ms;
   }
 
   currentEpoch(): number {

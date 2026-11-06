@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # mini-run.sh <cto> — start one relay on the mini (launchd). Keys are read from the
 # per-CTO macOS user's login keychain into a private temp dir (0700, removed on exit).
-# Keychain item names are placeholders: set them when the keychains are created.
+# Keychain items (C1-FU-3), one login keychain per macOS user cto-relay-<cto>, created at failover setup
+# with the SAME names as the Secure Vault labels: cto-relay-<cto>-slack-app, cto-relay-<cto>-slack-bot,
+# and (Muse only) cto-relay-muse for the brain key.
 set -euo pipefail
 cto="$1"
 key_dir=$(mktemp -d); chmod 0700 "$key_dir"; trap 'rm -rf "$key_dir"' EXIT
 umask 0277
-security find-generic-password -s "<KEYCHAIN_ITEM_SLACK_APP_TOKEN>" -w > "$key_dir/slack-app-token"
-security find-generic-password -s "<KEYCHAIN_ITEM_SLACK_BOT_TOKEN>" -w > "$key_dir/slack-bot-token"
+security find-generic-password -s "cto-relay-$cto-slack-app" -w > "$key_dir/slack-app-token"
+security find-generic-password -s "cto-relay-$cto-slack-bot" -w > "$key_dir/slack-bot-token"
 if [ "$cto" = muse ]; then security find-generic-password -s "cto-relay-muse" -w > "$key_dir/brain-key"; fi
 export CTO_RELAY_CTO="$cto" CTO_RELAY_KEY_DIR="$key_dir" CTO_RELAY_HOLDER=mini \
   CTO_RELAY_STATE_DIR="/var/lib/cto-relay/$cto" CTO_RELAY_RUN_DIR=/var/run/cto-relay \

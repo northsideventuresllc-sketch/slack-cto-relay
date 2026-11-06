@@ -123,7 +123,7 @@ test('abort-vs-claim: claim first → the abort becomes a stop request; "stopped
   await h.core.handleEvent({ ...mention(h, 'claude', ''), ingress: 'message', text: `abort: ${id}` });
   assert.match(h.sender.texts().at(-1)!, /stop request/);
   await h.core.markStopped(id);
-  assert.equal(h.sender.texts().at(-1), `stopped: fire id ${id}.`);
+  assert.equal(h.sender.texts().at(-1), `Stopped: fire id ${id}.`);
 });
 
 test('manual state machine: claim → start → link posts the run link and writes linked; lock held until closed', async () => {

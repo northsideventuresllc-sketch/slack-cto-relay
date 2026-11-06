@@ -36,7 +36,7 @@ import { REPO_ROOT } from '../src/config.js';
 export function testRegistry(): Registry {
   const r = loadRegistry();
   const ids: Record<string, string> = { muse: 'CMUSE0001', claude: 'CCLAUDE01', gemini: 'CGEMINI01', 'axon-hermes': 'CAXON0001' };
-  const agents: Record<string, string> = { muse: 'MUSE', claude: 'CLAUDE', gemini: 'GEMINI-TEST', 'axon-hermes': 'AXON-HERMES-TEST' };
+  const agents: Record<string, string> = { muse: 'MUSE', claude: 'CLAUDE', gemini: 'Gemini CTO', 'axon-hermes': 'AXON-Hermes CTO' };
   return { ...r, ctos: r.ctos.map((c) => ({ ...c, channelId: ids[c.key] ?? c.channelId, agentName: agents[c.key] ?? c.agentName })) };
 }
 
@@ -54,17 +54,22 @@ export class FakeBrain implements BrainApi {
   heartbeats = new Map<string, HeartbeatRow>();
   alerts: Array<{ toAgent: string; subject: string }> = [];
   down = false;
+  delayMs = 0; // simulate a slow (answering) brain
   insertOrder: string[] = [];
   constructor(private readonly clock: FakeClock) {}
 
   private check(): void {
     if (this.down) throw new BrainError('unreachable', null);
   }
+  private async slow(): Promise<void> {
+    if (this.delayMs > 0) await new Promise((r) => setTimeout(r, this.delayMs));
+  }
   async ping(): Promise<void> {
     this.check();
   }
   async insertFireRow(row: NewFireRow): Promise<FireRow> {
     this.check();
+    await this.slow();
     const id = randomUUID();
     const r: FireRow = {
       id,
@@ -111,9 +116,10 @@ export class FakeBrain implements BrainApi {
     if (patch.evidence !== undefined) r.evidence = { relay: patch.evidence };
     return structuredClone(r);
   }
-  async countStarts(sinceIso: string, toAgent?: string): Promise<number> {
+  async countStarts(sinceIso: string, toAgent?: string, untilIso?: string): Promise<number> {
     this.check();
-    return [...this.rows.values()].filter((r) => (r.fired_at ?? '') >= sinceIso && !['refused', 'cancelled'].includes(r.status ?? '') && (!toAgent || r.to_agent === toAgent)).length;
+    await this.slow();
+    return [...this.rows.values()].filter((r) => (r.fired_at ?? '') >= sinceIso && (!untilIso || (r.fired_at ?? '') < untilIso) && !['refused', 'cancelled'].includes(r.status ?? '') && (!toAgent || r.to_agent === toAgent)).length;
   }
   async insertAlertRow(toAgent: string, _from: string, subject: string): Promise<void> {
     this.check();
@@ -121,6 +127,7 @@ export class FakeBrain implements BrainApi {
   }
   async getLease(name: string): Promise<LeaseRow | null> {
     this.check();
+    await this.slow();
     const l = this.leases.get(name);
     return l ? { ...l } : null;
   }

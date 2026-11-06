@@ -1,5 +1,5 @@
 {
-  "$comment": "CTO registry — the single source for which adapter serves which CTO (PLAN-v7 D6). IDs from RUNBOOK.md Phase 1 verification (2026-11-05). Values in <ANGLE_BRACKETS> are placeholders: the relay refuses to start while any placeholder remains. The four private CTO channels are created in Phase 3; record their ids here then.",
+  "$comment": "CTO registry — the single source for which adapter serves which CTO (PLAN-v7 D6). IDs from RUNBOOK.md Phase 1 verification (2026-11-05). Agent names: MUSE verified from a live agent_comms row (RUNBOOK Phase 1); CLAUDE per PLAN-v7 D7; Gemini CTO and AXON-Hermes CTO set by COUNCIL GATE round 1 (Gemini CTO seen in live rows; AXON-Hermes CTO matches the Slack bot name — verify against a live row or the harness roster before first deploy). Values in <ANGLE_BRACKETS> are placeholders: the relay refuses to start while any placeholder remains. The four private CTO channels are created in Phase 3; record their ids here then.",
   "workspace": {
     "teamId": "T0CDTE2JR0B",
     "domain": "northsidevent-jtb2955.slack.com"
@@ -46,7 +46,7 @@
       "appId": "A0CDZJJF2FL",
       "botUserId": "U0CDJCXHW0P",
       "adapter": "manual",
-      "agentName": "<GEMINI_AGENT_NAME>",
+      "agentName": "Gemini CTO",
       "channelId": "<CTO_GEMINI_CHANNEL_ID>",
       "channelName": "cto-gemini",
       "command": "/fire-gemini",
@@ -60,7 +60,7 @@
       "appId": "A0CDXR7766A",
       "botUserId": "U0CDXRAETNJ",
       "adapter": "manual",
-      "agentName": "<AXON_HERMES_AGENT_NAME>",
+      "agentName": "AXON-Hermes CTO",
       "channelId": "<CTO_AXON_HERMES_CHANNEL_ID>",
       "channelName": "cto-axon-hermes",
       "command": "/fire-axon-hermes",
@@ -72,6 +72,8 @@
   "caps": {
     "$comment": "Phase 0 fallback numbers (RUNBOOK Phase 0). The lower binds.",
     "perFireTokenBudget": 25000,
+    "monthlyTokenCeiling": 600000,
+    "weeklyStartFloor": 5,
     "dailyStartCapTotal": 1,
     "monthlyStartCapTotal": 24,
     "perCtoWeeklyManualCap": 10,

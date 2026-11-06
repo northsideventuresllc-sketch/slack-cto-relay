@@ -54,19 +54,54 @@ D4's manual `health()` rule ("reachable means the Muse program is up") follows f
 
 ## 2. Before the first deploy (checklist)
 
-Fill these in. Do not guess them.
+Fill these in. Do not guess them. Every value below either has its real value here, or a named source to read it from. `deploy.sh` lists any line still holding a `<PLACEHOLDER>` in any case (C2-FU-11), and the services refuse to start while one remains.
 
-1. `config/registry.json` needs the four private CTO channel ids (Phase 3 creates the channels) in place of `<CTO_*_CHANNEL_ID>`. A program refuses to start while any channel id is a placeholder.
-2. `config/registry.json` needs the `agent_comms.to_agent` names for Gemini and AXON-Hermes (`<GEMINI_AGENT_NAME>`, `<AXON_HERMES_AGENT_NAME>`). PLAN-v7 names only `MUSE` and `CLAUDE`. Read the real names from existing `agent_comms` rows, or decide them at COUNCIL GATE.
-3. `/etc/cto-relay/fetch-keys.conf`:
-   - `VAULT_GET`: the Secure Vault CLI command. It takes a label and prints only the value. It reads the machine token from the file in `$VAULT_TOKEN_FILE`.
-   - The eight Slack token labels. The brain label is `cto-relay-muse`.
-4. `/etc/cto-relay/relay.env`:
-   - `SUPABASE_URL=<SUPABASE_URL>`: the NI Brain REST base for project `uaztknnipdxxptrmlxlb`.
-   - `CTO_RELAY_VAULT_WEB_BASE=<VAULT_WEB_BASE>`: the vault repo's `blob/main` URL, used for the map's Log link.
-5. The `vault-cli-machine` machine token. Muse CTO creates it in the Secure Vault web UI (D7 hook bootstrap). It goes on the VM via the deploy script's `--vault-token-stdin`.
-6. A **read-only vault credential** for the four `vault/` checkouts, so close-out read-back can `git fetch`. D7 does not list this key. **COUNCIL GATE item.** A GitHub read-only deploy key per program is the smallest option. Store it in the Secure Vault.
-7. Fill `<MUSE_CTO_USER>` in `deploy/sudoers/cto-relay` with the login of Muse CTO's main-chat user.
+1. **Phase 3 Slack work** (C2-FU-7):
+   - **Four private CTO channels.** Create them and put their ids into `config/registry.json` in place of `<CTO_*_CHANNEL_ID>`. A program refuses to start while any channel id is a placeholder (the refusal names `config/registry.json`).
+   - **Event subscriptions, on each of the four apps** (Event Subscriptions → Subscribe to bot events): `app_mention`, `message.channels`, `message.groups`. Without them the relay sees no starts; the Phase 5 ingress test catches it.
+   - **Slash commands, one per app, in Socket Mode** (Slash Commands): `/fire-muse`, `/fire-claude`, `/fire-gemini`, `/fire-axon-hermes`. Check each name is free first (dashboard list; fallback names in D4). The `commands` scope is already granted (Phase 1, 10 scopes each).
+2. **Agent names — set** (COUNCIL GATE round 1). `config/registry.json` carries:
+   - `MUSE`: verified from a live row;
+   - `CLAUDE`: PLAN-v7 D7;
+   - `Gemini CTO`: seen in live rows;
+   - `AXON-Hermes CTO`: matches the Slack bot name.
+
+   Before the first deploy, check `AXON-Hermes CTO` against a live `agent_comms` row or the harness roster. A wrong name fails loudly at the broker's `toAgent` match.
+3. **`/etc/cto-relay/fetch-keys.conf` — `VAULT_GET`** (C2-FU-1).
+   - **The interface is fixed.** One argument (the vault label). It reads the machine token from the file in `$VAULT_TOKEN_FILE` (`/etc/cto-relay/vault-token`) and prints only the value on stdout.
+   - **The concrete command string is TO RECORD.** It is not in PLAN-v7, the setup RUNBOOK, or this repo, and no Secure Vault CLI exists in the workspace to check one against, so it is not guessed here.
+   - **Procedure:**
+     1. Muse CTO creates the `vault-cli-machine` machine token in the Secure Vault web UI (D7 hook bootstrap).
+     2. `sudo deploy/scripts/deploy.sh --vault-token-stdin` writes it to `/etc/cto-relay/vault-token` (mode 0400, owner root).
+     3. Muse CTO records the Secure Vault's CLI fetch command in `VAULT_GET`.
+     4. Check it by hand once: `sudo VAULT_TOKEN_FILE=/etc/cto-relay/vault-token <command> cto-relay-muse > /dev/null && echo ok`. Never print the value.
+
+     The fetch hook refuses to run (exit 78) while `VAULT_GET` is a placeholder.
+4. **Slack token labels — named** (C2-FU-4). Store each token in the Secure Vault under these labels (already in `fetch-keys.conf.example`):
+
+   | Label | Value comes from (each app's settings page, api.slack.com/apps) |
+   |---|---|
+   | `cto-relay-<cto>-slack-app` | Basic Information → App-Level Tokens → "<App name> Socket Token" (`connections:write`) |
+   | `cto-relay-<cto>-slack-bot` | OAuth & Permissions → Bot User OAuth Token |
+
+   `<cto>` is one of `muse`, `claude`, `gemini`, `axon-hermes`. The brain key label is `cto-relay-muse` (stored, Phase 1).
+5. **Vault deploy keys — named** (C2-FU-2, C2-FU-3). Owner: Muse CTO. Both are created on the vault repo, GitHub → Settings → Deploy keys.
+
+   | Label | Type | Used by | How it reaches the host |
+   |---|---|---|---|
+   | `cto-relay-vault-read` | read-only deploy key (one key, shared by the four programs) | close-out read-back (`git fetch`, `git show origin/main:<path>`) | fetched into each program's tmpfs as `vault-read-key` on every start |
+   | `cto-relay-vault-write` | deploy key with **Allow write access** | the nightly job: checksums, mirror, brain archive into the vault | fetched into `/run/credentials/cto-relay-offhost/` by the off-host unit's ExecStartPre |
+
+   **Vault repo:** `git@github.com:northsideventuresllc-sketch/nv-vault.git`, taken from PLAN-v7 Appendix A's Log link. **Verify before first deploy.** Each checkout is cloned automatically on first use.
+
+   **GitHub host keys:** `deploy.sh` pins them in `/etc/cto-relay/known_hosts`. Check the printed fingerprints against GitHub's published "SSH key fingerprints" page.
+6. **`/etc/cto-relay/relay.env`:**
+   - `SUPABASE_URL=<SUPABASE_URL>`: the NI Brain REST base for project `uaztknnipdxxptrmlxlb`. Read it from the Supabase dashboard → Project Settings → API.
+   - `CTO_RELAY_VAULT_WEB_BASE` and `CTO_RELAY_VAULT_REPO_URL` are prefilled from Appendix A; verify them.
+7. **`/etc/cto-relay/offhost.env`:**
+   - `VAULT_MIRROR_PATH` = `_AI/CTO Loop/Mirror` and `VAULT_ARCHIVE_PATH` = `_AI/CTO Loop/Brain Archive` (C1-FU-2). These are new folders for the loop; Muse CTO may rename them.
+   - `MINI_SSH_DEST` = `<user>@<name>.local`. Read it on the mini (C1-FU-3): run `whoami` as the copy user, and `scutil --get LocalHostName`.
+8. Fill `<MUSE_CTO_USER>` in `deploy/sudoers/cto-relay` with the login of Muse CTO's main-chat user on this VM.
 
 ---
 
@@ -95,10 +130,7 @@ Then:
    ```bash
    sudo usermod -a -G cto-relay-admin <MUSE_CTO_USER>
    ```
-3. Clone the vault read-only into each program's state dir, using the read-only credential from §2.6:
-   ```bash
-   sudo -u cto-relay-<cto> git clone <VAULT_REPO_URL> /var/lib/cto-relay/<cto>/vault
-   ```
+3. There is no manual vault clone. Each program clones `CTO_RELAY_VAULT_REPO_URL` into `/var/lib/cto-relay/<cto>/vault` on its first close-out read-back, with the read-only key (§2.5). The nightly job clones the filing checkout with the write key.
 4. Start everything:
    ```bash
    sudo systemctl enable --now cto-heartbeat.timer cto-relay-offhost-copy.timer
@@ -163,9 +195,11 @@ Labels only; never values.
 
 | File in tmpfs | Who | Vault label |
 |---|---|---|
-| `slack-app-token` | each program | `<LABEL_<CTO>_SLACK_APP_TOKEN>` (Socket Mode, `connections:write`) |
-| `slack-bot-token` | each program | `<LABEL_<CTO>_SLACK_BOT_TOKEN>` (10 bot scopes incl. `commands`) |
+| `slack-app-token` | each program | `cto-relay-<cto>-slack-app` (Socket Mode, `connections:write`) |
+| `slack-bot-token` | each program | `cto-relay-<cto>-slack-bot` (10 bot scopes incl. `commands`) |
 | `brain-key` | Muse program + `cto-heartbeat` | `cto-relay-muse` |
+| `vault-read-key` | each program | `cto-relay-vault-read` (read-only vault deploy key) |
+| `vault-write-key` | the nightly off-host job only | `cto-relay-vault-write` (vault deploy key with write access) |
 
 ### Hook
 `/usr/local/bin/cto-relay-fetch-keys <cto>` does the following:
@@ -272,7 +306,13 @@ cto-relay admin review-clear --cto claude
 5. If the relay restarts inside that hour, the reconciler finds the unmatched marker. It posts "A start waiting for its one retry was lost when the relay restarted. Please re-send it." in that channel.
 
 ### Muse automatic — the mailbox drain contract
-The drain is outside this repo. It must follow these rules:
+The drain is outside this repo (C2-FU-6):
+- **Owner:** Muse CTO, as part of its main-chat harness (the MUSE mailbox drain).
+- **Host:** this VM, the same host as the relay and the `cto-heartbeat` cron.
+- **Schedule:** every **30 minutes** (D4). That is the Muse fire-to-start time, and the relay's 35-minute link window is sized to it.
+- **Run link form:** `https://muse.ai/chat/<run-id>`, the form PLAN-v7 D4 names. The Phase 1 record has no live check of it, so **verify it on the first Phase 5 Muse start.** The relay posts whatever URL the drain writes; it never builds the link itself.
+
+It must follow these rules:
 - **Pick up only** `agent_comms` rows with `code = 'cto-relay-fire'`, `to_agent = 'MUSE'`, `status = 'queued'`.
 - **Skip** `refused` and `cancelled` rows.
 - **Before picking a row up, check journal presence:**
@@ -280,7 +320,7 @@ The drain is outside this repo. It must follow these rules:
   cto-relay admin journal-has --cto muse --fire-id <ROW_ID>
   ```
   `{"has":false}` means skip. The reconciler marks such a row `failed` and tells the requester.
-- **On pickup:** set `status` to `claimed`, then `started`. Write the run link into `evidence.relay.run_chat_url` using `https://muse.ai/chat/<run-id>` (the form Phase 1 is to verify). Do the update read-modify-write, guarded by `evidence.relay.v`, and bump `v` by 1.
+- **On pickup:** set `status` to `claimed`, then `started`. Write the run link into `evidence.relay.run_chat_url`. Do the update read-modify-write, guarded by `evidence.relay.v`, and bump `v` by 1.
 - **What the relay does next:** it checks its rows every 5 minutes and posts `Run: <link>` when the link appears. With no link 35 minutes after the start, it posts a visible failure and alerts.
 - Rows with `code = 'cto-relay-alert'` are alerts to Muse CTO, not starts.
 
@@ -343,7 +383,9 @@ It runs as user `cto-relay-muse`. The secrets come from that user's keychain and
 - **Alert at 45 min:** an `agent_comms` row to CLAUDE. If the brain is down, it writes `/var/lib/cto-relay/mini/alerts.jsonl` instead, which Claude CTO reads at the morning check-in.
 - **Failover detected:** the VM Muse health fails 3 consecutive polls AND Muse CTO is offline. The poller sends the failover row to CLAUDE once.
 - **Dead-owner sweep (R7-NEW-4):** while the Muse program is down, the poller runs the D5 §6 sweep every 6 h with the **reduced** still-active test: prongs (b) + (c) only. Prong (a) is skipped, because the mini has no adapter to probe and no v1 adapter has a live probe anyway.
-  - (b) reads the last 24 h of Slack history in the four CTO channels from `config/registry.json`. It uses the Muse CTO bot token (`channels:history` / `groups:history`) from the `cto-relay-muse` login keychain, keychain item `<KEYCHAIN_ITEM_SLACK_BOT_TOKEN>`.
+  - (b) reads the last 24 h of Slack history in the four CTO channels from `config/registry.json`. It uses the Muse CTO bot token (`channels:history` / `groups:history`) from the `cto-relay-muse` login keychain, keychain item `cto-relay-muse-slack-bot`.
+
+**Mini keychain items** (C1-FU-3) are created at failover setup in each `cto-relay-<cto>` macOS user's login keychain, with the same names as the vault labels: `cto-relay-<cto>-slack-app`, `cto-relay-<cto>-slack-bot`, and, Muse only, `cto-relay-muse` (the brain key).
   - (c) reads `evidence.relay.last_progress_at` from the **live** brain rows, not from the up-to-24-hours-stale off-host run-log copy.
   - Findings go to CLAUDE, labelled "reduced test: prongs b+c". The fallback never posts in Slack.
 - **The poller's own liveness (R7-NEW-5):** every run writes a `cto_heartbeat` row for agent `MINI-POLLER`. The VM Muse program checks it every minute. If it is stale for over 5 min, it alerts and posts "The mini poller has stopped answering…" in #cto-bots, once per incident, then "The mini poller is back." on recovery.
@@ -483,7 +525,29 @@ A run is **still active** if any of these holds:
 - **After 3 missed lease heartbeats (90 s):** a running program stops firing and posting (lease rule). New starts in that time get **no reply**. **COUNCIL GATE flag:** the plan's brain-down reply path only covers outages shorter than 90 s.
 - **A program that restarts during the outage** cannot reach the brain, so it refuses to start (fail-closed). Its restore and reconciler run once the brain is back and it starts; loss notices arrive then. Meanwhile, if the Muse program is still up, it posts "<CTO> relay is down" in #cto-bots after 3 failed health polls.
 
+## 11c. The 3-second reply bound (C2-FU-9)
+- The brain work before a short reply runs inside a **2.2 s budget from socket receipt**. That work is the three cap counts and the live lease read, run concurrently, then the brain-row write.
+- If the brain answers too slowly for the budget, the start is held exactly like a brain-down start ("Queued. Brain is down. Will retry.") and retried after **1 minute** rather than the hourly outage cadence. A write that lands late is adopted by the retry, never written twice.
+- The post fence's live lease read reuses the fire path's own check when it is under 2 s old, and is capped at 0.7 s.
+- **What stays measured, not bounded:** time an event waits in the serial lane behind another single entry's work. Periodic jobs take the lane one entry at a time, never for a whole job. Ack latency is timed from socket receipt, with P50/P95/max and `ackBreachCount` on `/health`. The Phase 5 proof pack records it (acceptance: under 3 s, measured).
+
+## 11d. Post fencing (OPT-FU-1 / KAR-FU-1)
+- Every post does a **live** read of the lease row (epoch + holder), like a fire, so a deposed holder cannot post inside its last heartbeat interval.
+- If the brain cannot be reached, the heartbeat-confirmed local check stands, and the lease rule stops all posting after 3 missed heartbeats.
+- The fence was tightened, not loosened. Flag #16 (the brain-down reply only in the first 90 s of an outage) is unchanged, as COUNCIL GATE ruled.
+- The JB start relay (`fire` post-queue entries) goes through the same fence and alerts on any refusal (C1-FU-7).
+
 ## 12. Kill switch
+
+**Measured, not counted by hand (ECO-FU-3).** Every Monday at the 9am check-in, the Muse program writes the week's line to `/var/lib/cto-relay/muse/weekly-review.jsonl` and alerts Muse CTO with the numbers. The line holds:
+- starts total and per CTO (brain rows);
+- fired-run tokens reported at close-out, plus how many runs were unmetered;
+- the weekly share of the 600,000-token ceiling;
+- whether the week was below the floor of 5.
+
+When the total stays below 5 for two reviews in a row and did not rise, it raises **`kill-switch-condition-met`**. Muse CTO then decides.
+
+Review tokens (≤ 50,000 a week) are Muse CTO's own harness spend. They are recorded as `null` in the line and filled in at the review. Every start also leaves a cost line, including starts that never closed: those are 0 tokens if the start never ran, unmetered if it ran (ECO-FU-2).
 
 **Pause.** If starts per week stay below 5 for two reviews in a row and the trend is flat:
 1. Run:
@@ -499,6 +563,23 @@ A run is **still active** if any of these holds:
 
 ## 13. Phase 2 exit tests — procedures
 
+### Recorded facts (C1-FU-1 / C2-FU-8 / R3-FU-11)
+Measured live 2026-11-05 19:22 EST.
+
+**VM headroom:**
+- RAM: 7.9 GB total, 952 MB available.
+- CPUs: 4. Load average 3.35 (the VM was busy at measure time).
+- Disk: 79 GB free on `/home`, 7.0 GB free on `/`.
+- **Fit:** the four relay services cap at `MemoryMax=128M` each, 512 MB total, which fits the available RAM.
+
+**Paid host:** the relay is hosted on this VM. There is **no paid host and no paid-host price** to pay. No provider price is recorded, because none applies.
+
+**Paid-host trigger (D4 limits table)** — re-measure at the 30/60-day review:
+- 15-minute load average over 70% of the core count for 1 hour (here, 2.8 on 4 cores); or
+- disk under 10 GB.
+
+At measure time, `/` was **already under 10 GB (7.0 GB free)**. The relay's state lives under `/var/lib`, so watch `/` and record it at each review.
+
 | Test | How | Automated coverage |
 |---|---|---|
 | Health endpoints answer with numbers incl. adapter health | `curl` each port on localhost + 198.19.0.2 | — |
@@ -506,12 +587,12 @@ A run is **still active** if any of these holds:
 | Kill one program | `sudo systemctl kill -s KILL cto-relay-gemini`. The other three keep answering; systemd restarts Gemini; restore re-posts state | — |
 | Breaker-count restart | trip the breaker (4 attempts / 10 min), `systemctl restart`, a 5th attempt is still refused | `test/core.test.ts` "breaker restart test" |
 | Journal failure → no run | `CTO_RELAY_ENABLE_TEST_HOOKS=1` on a test unit, then `cto-relay admin test-fail-next-journal-write --cto muse`, then fire. The row is voided (`refused`), "Not started." is posted, no run starts | `test/core.test.ts` "journal-failure test" |
-| VM headroom | record `free -m`, `df -h /var/lib`, `uptime` (15-min load vs cores) here: **TO RECORD** | — |
-| Paid-host price | record from the current provider page here: **TO RECORD** (R3-FU-11 deferral) | — |
+| VM headroom | **Recorded — measured live 2026-11-05 19:22 EST** (see below) | — |
+| Paid-host price | **Recorded — none.** The relay runs on this VM; there is no paid host and no paid-host price to pay. | — |
 | Solo rebuild | Claude CTO rebuilds from this runbook alone within 2 h; smoke test passes | — |
 
 Local checks, run in the repo:
 ```bash
 npm ci && npm run check
 ```
-That runs typecheck (`tsc --noEmit`), the test suite (62 tests), and the key-pattern grep. Run `npm run lint:shell` for the deploy scripts.
+That runs typecheck (`tsc --noEmit`), the test suite (74 tests), and the key-pattern grep. Run `npm run lint:shell` for the deploy scripts.

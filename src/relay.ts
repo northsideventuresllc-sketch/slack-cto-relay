@@ -36,7 +36,7 @@ import { MuseDuties } from './sweep.js';
 import { GitVaultReader } from './vault.js';
 import { ensureDir } from './util/durable.js';
 import { createLogger, errorCode, type Logger } from './util/log.js';
-import { HOUR, MIN, nextLocalTime, realClock, type Clock } from './util/time.js';
+import { HOUR, MIN, nextLocalTime, realClock, zonedParts, type Clock } from './util/time.js';
 
 export const EXIT_RETRY = 1; // systemd Restart=on-failure retries (brain down, lease held elsewhere)
 
@@ -101,7 +101,7 @@ export class RelayProgram {
     const isMuse = cto.key === 'muse';
 
     const blocked = placeholdersBlocking(cfg.registry, cto.key);
-    if (blocked.length) throw new Fatal(EXIT_STAY_DOWN, `config placeholders unset: ${blocked.join(',')}`);
+    if (blocked.length) throw new Fatal(EXIT_STAY_DOWN, `config placeholders unset in config/registry.json (CTO_RELAY_REGISTRY): ${blocked.join(',')}`);
 
     ensureDir(cfg.stateDir, 0o700);
     const appToken = readCredential(cfg.credentialsDir, CRED_SLACK_APP);
@@ -201,7 +201,8 @@ export class RelayProgram {
     });
     const maintenance = new Maintenance(core, serialize);
     const outbox = new Outbox(cfg.stateDir);
-    const closeouts = new Closeouts(core, outbox, new GitVaultReader(cfg.vaultDir, cfg.vaultWebBase), core.d.caps, serialize);
+    const vaultReadKey = cfg.credentialsDir ? join(cfg.credentialsDir, 'vault-read-key') : null;
+    const closeouts = new Closeouts(core, outbox, new GitVaultReader(cfg.vaultDir, cfg.vaultWebBase, 'main', vaultReadKey, '/etc/cto-relay/known_hosts', cfg.vaultRepoUrl), core.d.caps, serialize);
 
     this.health = new HealthServer({
       cto: cto.key,
@@ -228,7 +229,7 @@ export class RelayProgram {
     let duties: MuseDuties | null = null;
     let mirror: MirrorWriter | null = null;
     if (isMuse) {
-      duties = new MuseDuties(brain, cfg.registry, poster, slack, this.clock, this.log, alert, (port) => probeHealth(port));
+      duties = new MuseDuties(brain, cfg.registry, poster, slack, this.clock, this.log, alert, (port) => probeHealth(port), cfg.timezone);
       this.duties = duties;
       if (cfg.mirrorDir) mirror = new MirrorWriter(cfg.mirrorDir, cfg.registry, blocklist, this.clock, cfg.timezone);
       if (cfg.postQueuePath) {
@@ -275,6 +276,10 @@ export class RelayProgram {
       await maintenance.pollRows();
       await this.lane.run(() => maintenance.nineAm());
       if (duties) await duties.dailyOpen();
+      // ECO-FU-3: the Monday review, measured (starts/week vs the floor of 5, tokens vs the ceiling share).
+      if (duties && zonedParts(this.clock(), cfg.timezone).weekday === 1) {
+        await duties.weeklyReview(cfg.stateDir, { monthlyTokenCeiling: cfg.registry.caps.monthlyTokenCeiling, weeklyFloor: cfg.registry.caps.weeklyStartFloor });
+      }
     });
     this.daily(3, 0, async () => {
       await this.lane.run(async () => {
@@ -362,15 +367,9 @@ export class RelayProgram {
     }
     // Another CTO: post the explicit start pattern as the Muse CTO bot in that CTO's channel.
     // Only that CTO's program receives the app_mention, so exactly one run starts there.
+    // Through the poster: live lease fence, backoff, and an alert on any refusal (C1-FU-7).
     const task = e.task.replace(/\s+/g, ' ').trim().replace(/<[@!#][^>]*>/g, '');
-    if (!this.lease?.canAct()) return;
-    try {
-      await this.slack?.postWithTs(target.channelId, `<@${target.botUserId}> fire: ${task}`);
-      core.d.runlog.write({ kind: 'post', fireId: null, channelId: target.channelId, result: 'start-relayed', writer: 'relay' });
-    } catch (err) {
-      core.d.alert('start-relay-post-failed', { cto: target.key });
-      this.log.error('start relay failed', { err: errorCode(err) });
-    }
+    await poster.postStartRelay(target.channelId, target.botUserId, task);
   }
 
   private every(ms: number, fn: () => Promise<unknown> | void): void {

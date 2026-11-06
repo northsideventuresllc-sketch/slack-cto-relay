@@ -94,7 +94,8 @@ export type FireJournalState =
   | 'lost-notified'
   | 'closeout-requested'
   | 'retry-pending'
-  | 'retry-done';
+  | 'retry-done'
+  | 'breaker-replied';
 
 // ---------------------------------------------------------------------------
 // Harness adapter — HarnessAdapter v1

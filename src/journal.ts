@@ -29,6 +29,7 @@ const FIRE_STATES = [
   'closeout-requested',
   'retry-pending',
   'retry-done',
+  'breaker-replied',
 ] as const satisfies readonly FireJournalState[];
 
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -64,6 +65,7 @@ export const TERMINAL_JOURNAL_STATES: ReadonlySet<FireJournalState> = new Set<Fi
   'refused',
   'cancelled',
   'retry-done', // a start-retry marker is over (R7-NEW-3); purged with the dedup window
+  'breaker-replied', // the breaker's single trip reply went out (OPT-FU-4); purged with the dedup window
 ]);
 
 export type JournalInput = Omit<JournalRecord, 'timestamp'>;

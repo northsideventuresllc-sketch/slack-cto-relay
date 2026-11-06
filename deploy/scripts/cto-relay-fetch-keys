@@ -6,9 +6,10 @@
 # and writes them to tmpfs /run/credentials/cto-relay-<cto>/ (dir 0500, files
 # 0400, owner = the service user). The fresh fetch always overwrites, so a key
 # rotated in the vault wins over a stale tmpfs copy.
-#   muse:         slack-app-token, slack-bot-token, brain-key (cto-relay-muse)
-#   claude/gemini/axon-hermes: slack-app-token, slack-bot-token only
+#   muse:         slack-app-token, slack-bot-token, brain-key (cto-relay-muse), vault-read-key
+#   claude/gemini/axon-hermes: slack-app-token, slack-bot-token, vault-read-key
 #   heartbeat:    brain-key only (cron cto-heartbeat)
+#   offhost:      vault-write-key only (nightly off-host copy + vault filing; owner root)
 # The hook's own vault credential is the machine token `vault-cli-machine`,
 # written by the deploy script to /etc/cto-relay/vault-token (0400 root).
 #
@@ -21,11 +22,12 @@ TOKEN_FILE=/etc/cto-relay/vault-token
 
 wipe=0
 if [ "${1:-}" = "--wipe" ]; then wipe=1; shift; fi
-target="${1:?usage: cto-relay-fetch-keys [--wipe] <muse|claude|gemini|axon-hermes|heartbeat>}"
+target="${1:?usage: cto-relay-fetch-keys [--wipe] <muse|claude|gemini|axon-hermes|heartbeat|offhost>}"
 
 case "$target" in
   muse|claude|gemini|axon-hermes) user="cto-relay-$target"; dir="/run/credentials/cto-relay-$target" ;;
   heartbeat) user="cto-relay-muse"; dir="/run/credentials/cto-heartbeat" ;;
+  offhost) user="root"; dir="/run/credentials/cto-relay-offhost" ;;
   *) echo "cto-relay-fetch-keys: unknown target" >&2; exit 64 ;;
 esac
 
@@ -43,17 +45,21 @@ if [ "$fstype" != "tmpfs" ]; then echo "cto-relay-fetch-keys: /run is not tmpfs 
 . "$CONF"   # defines VAULT_GET and the LABEL_* variables (labels only — never values)
 
 : "${VAULT_GET:?VAULT_GET not set in $CONF}"
+case "$VAULT_GET" in *"<"*) echo "cto-relay-fetch-keys: VAULT_GET is still a <PLACEHOLDER> in $CONF (runbook §2.3)" >&2; exit 78 ;; esac
 
 label_for() { # $1 = credential file name
   local key; key="LABEL_$(echo "${target}_$1" | tr 'a-z-' 'A-Z_')"
   if [ "$target" = heartbeat ] && [ "$1" = brain-key ]; then key="LABEL_MUSE_BRAIN_KEY"; fi
+  if [ "$1" = vault-read-key ]; then key="LABEL_VAULT_READ_KEY"; fi     # one read-only deploy key, shared
+  if [ "$1" = vault-write-key ]; then key="LABEL_VAULT_WRITE_KEY"; fi
   printf '%s' "${!key:-}"
 }
 
 case "$target" in
-  muse) files="slack-app-token slack-bot-token brain-key" ;;
+  muse) files="slack-app-token slack-bot-token brain-key vault-read-key" ;;
   heartbeat) files="brain-key" ;;
-  *) files="slack-app-token slack-bot-token" ;;
+  offhost) files="vault-write-key" ;;
+  *) files="slack-app-token slack-bot-token vault-read-key" ;;
 esac
 
 tmp="$dir.new.$$"
@@ -61,7 +67,7 @@ rm -rf "$tmp"
 install -d -m 0700 -o root -g root "$tmp"
 for f in $files; do
   label=$(label_for "$f")
-  [ -n "$label" ] || { echo "cto-relay-fetch-keys: no label for $target/$f in $CONF" >&2; rm -rf "$tmp"; exit 78; }
+  case "$label" in ""|*"<"*) echo "cto-relay-fetch-keys: no label (or a <PLACEHOLDER>) for $target/$f in $CONF" >&2; rm -rf "$tmp"; exit 78 ;; esac
   # VAULT_GET reads the machine token from the file named by $VAULT_TOKEN_FILE and
   # prints ONLY the secret value for the label on stdout. Output goes straight to the file.
   if ! VAULT_TOKEN_FILE="$TOKEN_FILE" $VAULT_GET "$label" > "$tmp/$f"; then

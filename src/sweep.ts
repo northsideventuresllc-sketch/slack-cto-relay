@@ -7,7 +7,9 @@ import { isPlaceholder, type CtoEntry, type Registry } from './config.js';
 import type { Poster } from './poster.js';
 import { T, isRelayTemplate } from './templates.js';
 import type { Logger } from './util/log.js';
-import { appendLineSync } from './util/durable.js';
+import { appendLineSync, readJsonLines } from './util/durable.js';
+import { readdirSync, existsSync } from 'node:fs';
+import { startOfLocalWeek } from './util/time.js';
 import { join } from 'node:path';
 import { DAY, HOUR, iso, type Clock } from './util/time.js';
 
@@ -89,6 +91,7 @@ export class MuseDuties {
     private readonly log: Logger,
     private readonly alert: (code: string, ids?: Record<string, string | number | null>) => void,
     private readonly fetchHealth: (port: number) => Promise<boolean>,
+    private readonly tz: string = 'America/New_York',
   ) {}
 
   private ctos(): CtoEntry[] {
@@ -212,14 +215,20 @@ export class MuseDuties {
   async archiveOldRows(dir: string): Promise<number> {
     const now = this.clock();
     let n = 0;
+    let archived: Set<string> | null = null;
     for (const cto of this.ctos()) {
       const rows = await this.brain.listFireRows(cto.agentName, ['closed', 'failed', 'expired', 'refused', 'cancelled']).catch(() => [] as FireRow[]);
       for (const row of rows) {
         const ev = relayEvidence(row);
         const done = Date.parse(row.completed_at ?? row.fired_at ?? '');
         if (!ev || ev.archived_at || !Number.isFinite(done) || now - done < BRAIN_ROW_RETENTION_MS) continue;
-        const month = iso(now).slice(0, 7);
-        appendLineSync(join(dir, `brain-archive-${month}.jsonl`), JSON.stringify(row), 0o640);
+        // ECO-FU-4: if an earlier night appended this row but its `archived_at` patch failed, do not append it again.
+        if (archived === null) archived = archivedIds(dir);
+        if (!archived.has(row.id)) {
+          const month = iso(now).slice(0, 7);
+          appendLineSync(join(dir, `brain-archive-${month}.jsonl`), JSON.stringify(row), 0o640);
+          archived.add(row.id);
+        }
         const ok = await this.brain.patchFireRow(row.id, { evidence: { ...ev, v: ev.v + 1, archived_at: iso(now) } }, { version: ev.v }).catch(() => null);
         if (ok) n++;
       }
@@ -274,6 +283,63 @@ export class MuseDuties {
     return { gap: gap.length };
   }
 
+  /**
+   * ECO-FU-3 — the Monday review, measured. Every Monday at the 9am check-in
+   * the Muse program counts last week's starts (total and per CTO, from the
+   * brain rows) and the fired-run tokens reported at close-out, compares them
+   * with the floor (5 starts a week) and the weekly share of the token ceiling,
+   * appends the line to <stateDir>/weekly-review.jsonl, and alerts Muse CTO with
+   * the numbers. If the total is below the floor for two reviews in a row AND
+   * did not rise (flat trend), it raises `kill-switch-condition-met`. Pausing
+   * stays Muse CTO's decision (runbook §12). Review tokens (≤50,000 a week) are
+   * Muse CTO's own harness spend: recorded as null here, filled in at the review.
+   */
+  async weeklyReview(stateDir: string, caps: { monthlyTokenCeiling: number; weeklyFloor: number }): Promise<WeeklyReview> {
+    const now = this.clock();
+    const until = startOfLocalWeek(now, this.tz);
+    const since = startOfLocalWeek(until - 1, this.tz);
+    const perCto: Record<string, number> = {};
+    let total = 0;
+    let tokens = 0;
+    let unmetered = 0;
+    for (const cto of this.ctos()) {
+      const n = await this.brain.countStarts(iso(since), cto.agentName, iso(until));
+      perCto[cto.key] = n;
+      total += n;
+      const closed = await this.brain.listFireRows(cto.agentName, ['closed']).catch(() => [] as FireRow[]);
+      for (const r of closed) {
+        const done = Date.parse(r.completed_at ?? '');
+        if (!Number.isFinite(done) || done < since || done >= until) continue;
+        const t = relayEvidence(r)?.closeout?.tokens;
+        if (typeof t === 'number') tokens += t;
+        else unmetered++;
+      }
+    }
+    const path = join(stateDir, 'weekly-review.jsonl');
+    const prev = (readJsonLines(path).values as WeeklyReview[]).at(-1) ?? null;
+    const belowFloor = total < caps.weeklyFloor;
+    const weeklyTokenShare = Math.round((caps.monthlyTokenCeiling * 7) / 30);
+    const review: WeeklyReview = {
+      weekStart: iso(since),
+      weekEnd: iso(until),
+      startsTotal: total,
+      startsPerCto: perCto,
+      firedRunTokens: tokens,
+      unmeteredRuns: unmetered,
+      weeklyTokenShare,
+      overTokenShare: tokens > weeklyTokenShare,
+      reviewTokens: null,
+      belowFloor,
+      killSwitchCondition: belowFloor && !!prev && prev.belowFloor && total <= prev.startsTotal,
+    };
+    if (prev?.weekStart === review.weekStart) return prev; // already reviewed this week
+    appendLineSync(path, JSON.stringify(review), 0o600);
+    this.alert('weekly-review-ready', { startsTotal: total, firedRunTokens: tokens, belowFloor: belowFloor ? 1 : 0 });
+    if (review.killSwitchCondition) this.alert('kill-switch-condition-met', { startsTotal: total, previous: prev?.startsTotal ?? null });
+    if (review.overTokenShare) this.alert('weekly-tokens-over-ceiling-share', { firedRunTokens: tokens, weeklyTokenShare });
+    return review;
+  }
+
   /** Every minute: the visible failure for a sibling program that is down (e.g. its token was revoked). */
   async watchSiblings(): Promise<void> {
     for (const cto of this.ctos()) {
@@ -293,4 +359,32 @@ export class MuseDuties {
       }
     }
   }
+}
+
+export interface WeeklyReview {
+  weekStart: string;
+  weekEnd: string;
+  startsTotal: number;
+  startsPerCto: Record<string, number>;
+  firedRunTokens: number;
+  unmeteredRuns: number;
+  weeklyTokenShare: number;
+  overTokenShare: boolean;
+  reviewTokens: number | null;
+  belowFloor: boolean;
+  killSwitchCondition: boolean;
+}
+
+/** Row ids already in the brain-archive files (ECO-FU-4 duplicate guard). */
+function archivedIds(dir: string): Set<string> {
+  const ids = new Set<string>();
+  if (!existsSync(dir)) return ids;
+  for (const name of readdirSync(dir)) {
+    if (!/^brain-archive-\d{4}-\d{2}\.jsonl$/.test(name)) continue;
+    for (const v of readJsonLines(join(dir, name)).values) {
+      const id = (v as { id?: unknown }).id;
+      if (typeof id === 'string') ids.add(id);
+    }
+  }
+  return ids;
 }

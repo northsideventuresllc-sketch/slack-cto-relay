@@ -149,7 +149,7 @@ export interface BrainApi {
   listFireRows(toAgent: string, statuses: readonly string[]): Promise<FireRow[]>;
   findFireRowByIdem(toAgent: string, idemKey: string): Promise<FireRow | null>;
   patchFireRow(id: string, patch: FirePatch, guard?: FirePatchGuard): Promise<FireRow | null>;
-  countStarts(sinceIso: string, toAgent?: string): Promise<number>;
+  countStarts(sinceIso: string, toAgent?: string, untilIso?: string): Promise<number>;
   insertAlertRow(toAgent: string, fromAgent: string, subject: string, body: string): Promise<void>;
   getLease(name: string): Promise<LeaseRow | null>;
   insertLease(row: LeaseRow): Promise<LeaseRow | null>; // null = a row already exists
@@ -293,8 +293,9 @@ export class DirectBrain implements BrainApi {
     return this.rows(json, FireRowSchema)[0] ?? null;
   }
 
-  async countStarts(sinceIso: string, toAgent?: string): Promise<number> {
+  async countStarts(sinceIso: string, toAgent?: string, untilIso?: string): Promise<number> {
     let q = `/agent_comms?select=id&code=eq.${CODE_FIRE}&fired_at=gte.${encodeURIComponent(sinceIso)}&status=not.in.(refused,cancelled)`;
+    if (untilIso) q += `&fired_at=lt.${encodeURIComponent(untilIso)}`;
     if (toAgent) q += `&to_agent=eq.${encodeURIComponent(toAgent)}`;
     const { headers } = await this.req('GET', q, undefined, 'count=exact', { Range: '0-0', 'Range-Unit': 'items' });
     const cr = headers.get('content-range') ?? '';

@@ -4,18 +4,30 @@
 
 import type { CtoEntry } from './config.js';
 
+/**
+ * C1-FU-4: the task text embedded in a short reply is clamped to 10 words (plus "…"),
+ * so the (e) first line stays short; the full task stays in the brain row.
+ */
+export const SHORT_REPLY_TASK_WORDS = 10;
+function short(task: string): string {
+  const words = task.split(/\s+/).filter((w) => w.length > 0);
+  return words.length <= SHORT_REPLY_TASK_WORDS ? words.join(' ') : words.slice(0, SHORT_REPLY_TASK_WORDS).join(' ') + '…';
+}
+
 export const T = {
   /** D4/Appendix A (e): automatic adapter short reply. */
   startedAutomatically: (task: string, fireId: string): string =>
-    `Started: ${task} — fire id ${fireId} — started automatically — run link to follow.`,
+    `Started: ${short(task)} — fire id ${fireId} — started automatically — run link to follow.`,
   /** D4/D6: manual adapter short reply. */
   queuedForPerson: (task: string, fireId: string, cto: CtoEntry): string =>
-    `Started: ${task} — fire id ${fireId} — queued for a person. Muse CTO will start it in ${cto.home}.`,
-  brainDown: (task: string, fireId: string): string => `Queued. Brain is down. Will retry. Task: ${task} — fire id ${fireId}.`,
+    `Started: ${short(task)} — fire id ${fireId} — queued for a person. Muse CTO will start it in ${cto.home}.`,
+  brainDown: (task: string, fireId: string): string => `Queued. Brain is down. Will retry. Task: ${short(task)} — fire id ${fireId}.`,
   /** D4 manual state machine: both the relay and the manual path down. */
   waitingBothDown: (task: string, fireId: string): string =>
-    `Waiting. It will start at the next check-in. If the relay restarts before then, this start may be lost — please re-send it if no reply arrives. Task: ${task} — fire id ${fireId}.`,
+    `Waiting. It will start at the next check-in. If the relay restarts before then, this start may be lost — please re-send it if no reply arrives. Task: ${short(task)} — fire id ${fireId}.`,
   alreadyRunning: (): string => 'Already running. No second run started.',
+  /** KAR-FU-4: a person ran a /fire command; starts come from the CTO bots (the allowlist). */
+  notAllowed: (): string => 'Starts come from the CTO bots only. Ask Muse CTO in main chat.',
   queueFull: (): string => 'Not started. The queue for this CTO is full (10 waiting).',
   /** Appendix A (e) second line. Gemini: session name plus Slack thread, not a link. */
   runLink: (link: string): string => `Run: ${link}`,
@@ -30,7 +42,7 @@ export const T = {
   cancelled: (fireId: string): string => `Cancelled: fire id ${fireId}. It will not start.`,
   stopRequested: (fireId: string): string =>
     `Fire id ${fireId} was already claimed, so the abort is now a stop request. Muse CTO will stop the run.`,
-  stopped: (fireId: string): string => `stopped: fire id ${fireId}.`,
+  stopped: (fireId: string): string => `Stopped: fire id ${fireId}.`,
   abortUnknown: (): string => 'No start with that fire id is waiting here.',
   /** D4/D6 restore: each queued row gets "still waiting"; each claimed/started row gets its current state. */
   stillWaiting: (fireId: string): string => `Still waiting: fire id ${fireId} has not started yet.`,
@@ -80,6 +92,7 @@ export const TEMPLATE_PREFIXES = [
   'Queued.',
   'Waiting.',
   'Already running.',
+  'Starts come from the CTO bots only.',
   'Not started.',
   'Run:',
   'Still waiting on a person.',
@@ -89,7 +102,7 @@ export const TEMPLATE_PREFIXES = [
   'Cancelled: fire id',
   'Fire id ',
   'Still waiting:',
-  'stopped: fire id',
+  'Stopped: fire id',
   'No start with that fire id',
   'Pending starts:',
   'Done:',

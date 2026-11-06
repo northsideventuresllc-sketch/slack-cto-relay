@@ -120,7 +120,8 @@ test('templates: Appendix A word rule (a standalone em dash is not a word); rela
 test('config: placeholders block start; effective daily cap is the lower of the daily cap and the manual-minutes ceiling', () => {
   const r = loadRegistry();
   assert.ok(placeholdersBlocking(r, 'muse').includes('muse.channelId'));
-  assert.ok(placeholdersBlocking(r, 'gemini').includes('gemini.agentName'));
+  assert.ok(!placeholdersBlocking(r, 'gemini').includes('gemini.agentName'), 'agent names set by COUNCIL GATE round 1');
+  assert.ok(placeholdersBlocking(r, 'gemini').includes('gemini.channelId'));
   assert.equal(placeholdersBlocking(testRegistry(), 'muse').length, 0);
   assert.equal(effectiveDailyCap(r.caps), 1);
 });

@@ -54,8 +54,8 @@ export class RunLog {
     return e;
   }
 
-  started(fireId: string, taskHash: string, adapterKey: string): void {
-    this.write({ kind: 'started', fireId, taskHash, sessionId: null, writer: `adapter:${adapterKey}`, state: 'started-entry' });
+  started(fireId: string, taskHash: string, adapterKey: string, fromProvisionalId?: string): void {
+    this.write({ kind: 'started', fireId, taskHash, sessionId: null, writer: `adapter:${adapterKey}`, state: 'started-entry', ...(fromProvisionalId ? { reason: `from:${fromProvisionalId}` } : {}) });
   }
 
   /** A state-changing entry written by the CTO's own adapter (claim, start, link, close-out) — refreshes the lock (D4). */

@@ -175,8 +175,13 @@ export class BrokerServer {
       case 'patchFireRow':
         await this.owned(str(0), cto);
         return this.brain.patchFireRow(str(0), a[1] as FirePatch, a[2] as FirePatchGuard | undefined);
-      case 'countStarts':
-        return this.brain.countStarts(str(0), a[1] === undefined || a[1] === null ? undefined : str(1));
+      case 'countStarts': {
+        // KAR-FU-2: global totals (no agent — the daily/monthly caps) or this socket's own agent only.
+        const agent = a[1] === undefined || a[1] === null ? undefined : str(1);
+        if (agent !== undefined && agent !== cto.agentName) throw new ScopeError();
+        const until = a[2] === undefined || a[2] === null ? undefined : str(2);
+        return this.brain.countStarts(str(0), agent, until);
+      }
       case 'insertAlertRow':
         if (str(0) !== ALERT_TO_AGENT) throw new ScopeError();
         return this.brain.insertAlertRow(str(0), str(1), str(2), str(3));
@@ -274,8 +279,8 @@ export class BrokeredBrain implements BrainApi {
     const r = await this.call('patchFireRow', [id, patch, guard]);
     return r === null ? null : FireRowSchema.parse(r);
   }
-  async countStarts(sinceIso: string, toAgent?: string): Promise<number> {
-    return z.number().int().parse(await this.call('countStarts', [sinceIso, toAgent ?? null]));
+  async countStarts(sinceIso: string, toAgent?: string, untilIso?: string): Promise<number> {
+    return z.number().int().parse(await this.call('countStarts', [sinceIso, toAgent ?? null, untilIso ?? null]));
   }
   async insertAlertRow(toAgent: string, fromAgent: string, subject: string, body: string): Promise<void> {
     await this.call('insertAlertRow', [toAgent, fromAgent, subject, body]);

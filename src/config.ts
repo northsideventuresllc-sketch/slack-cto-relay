@@ -30,6 +30,8 @@ export type CtoEntry = z.infer<typeof CtoEntrySchema>;
 
 const CapsSchema = z.object({
   perFireTokenBudget: z.number().int().positive(),
+  monthlyTokenCeiling: z.number().int().positive(),
+  weeklyStartFloor: z.number().int().positive(),
   dailyStartCapTotal: z.number().int().positive(),
   monthlyStartCapTotal: z.number().int().positive(),
   perCtoWeeklyManualCap: z.number().int().positive(),
@@ -59,6 +61,7 @@ const EnvSchema = z.object({
   CTO_RELAY_RUN_DIR: z.string().min(1).default('/run/cto-relay'),
   CTO_RELAY_VAULT_DIR: z.string().min(1).optional(),
   CTO_RELAY_VAULT_WEB_BASE: z.string().url().optional(),
+  CTO_RELAY_VAULT_REPO_URL: z.string().min(1).optional(),
   CTO_RELAY_HTTPS_PROXY: z.string().url().optional(),
   CTO_RELAY_POST_QUEUE: z.string().min(1).optional(),
   CTO_RELAY_MIRROR_DIR: z.string().min(1).optional(),
@@ -80,6 +83,7 @@ export interface RelayConfig {
   blocklistPath: string;
   vaultDir: string | null;
   vaultWebBase: string | null;
+  vaultRepoUrl: string | null; // C2-FU-3: cloned on first close-out read-back
   httpsProxy: string | null;
   postQueuePath: string | null; // Muse only
   mirrorDir: string | null; // Muse only
@@ -140,6 +144,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RelayConfig {
     blocklistPath: e.CTO_RELAY_BLOCKLIST ?? join(REPO_ROOT, 'config', 'blocklist.json'),
     vaultDir: e.CTO_RELAY_VAULT_DIR ?? null,
     vaultWebBase: e.CTO_RELAY_VAULT_WEB_BASE ?? null,
+    vaultRepoUrl: e.CTO_RELAY_VAULT_REPO_URL ?? null,
     httpsProxy: e.CTO_RELAY_HTTPS_PROXY ?? null,
     postQueuePath: isMuse ? (e.CTO_RELAY_POST_QUEUE ?? '/var/lib/cto-relay/muse/post-queue.jsonl') : null,
     mirrorDir: isMuse ? (e.CTO_RELAY_MIRROR_DIR ?? join(stateDir, 'mirror')) : null,

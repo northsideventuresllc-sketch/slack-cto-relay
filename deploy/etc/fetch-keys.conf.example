@@ -1,21 +1,27 @@
 # /etc/cto-relay/fetch-keys.conf  (root:root 0600) — LABELS ONLY, never values.
 #
-# VAULT_GET: a command that takes one argument (the Secure Vault label), reads
-# the vault-cli-machine token from the file in $VAULT_TOKEN_FILE, and prints
-# only the secret value on stdout.
-# PLACEHOLDER — the Secure Vault CLI command is not recorded in PLAN-v7 or the
-# runbook. Muse CTO fills this in at deploy time.
+# VAULT_GET: the command that takes one argument (a Secure Vault label), reads
+# the vault-cli-machine token from the file named in $VAULT_TOKEN_FILE
+# (/etc/cto-relay/vault-token), and prints ONLY the secret value on stdout.
+# TO RECORD — the concrete command string is not recorded in PLAN-v7, the
+# setup RUNBOOK, or this repo, and no Secure Vault CLI exists in the workspace to
+# verify one against. Do not guess it. Procedure: runbook §2.3. The fetch hook
+# refuses to run (exit 78) while this is still a placeholder.
 VAULT_GET="<VAULT_GET_COMMAND>"
 
-# Secure Vault labels. The brain key label is cto-relay-muse (PLAN-v7 D4/D7).
-# Slack token labels are not recorded in PLAN-v7 or the runbook: fill them in
-# from the Secure Vault labels list (Phase 1 / proof pack).
+# Secure Vault labels (C2-FU-4). These are the labels each key is STORED UNDER
+# (runbook §2.4 says where each value comes from in Slack). The brain key label
+# cto-relay-muse is from PLAN-v7 D4/D7.
 LABEL_MUSE_BRAIN_KEY="cto-relay-muse"
-LABEL_MUSE_SLACK_APP_TOKEN="<LABEL_MUSE_SLACK_APP_TOKEN>"
-LABEL_MUSE_SLACK_BOT_TOKEN="<LABEL_MUSE_SLACK_BOT_TOKEN>"
-LABEL_CLAUDE_SLACK_APP_TOKEN="<LABEL_CLAUDE_SLACK_APP_TOKEN>"
-LABEL_CLAUDE_SLACK_BOT_TOKEN="<LABEL_CLAUDE_SLACK_BOT_TOKEN>"
-LABEL_GEMINI_SLACK_APP_TOKEN="<LABEL_GEMINI_SLACK_APP_TOKEN>"
-LABEL_GEMINI_SLACK_BOT_TOKEN="<LABEL_GEMINI_SLACK_BOT_TOKEN>"
-LABEL_AXON_HERMES_SLACK_APP_TOKEN="<LABEL_AXON_HERMES_SLACK_APP_TOKEN>"
-LABEL_AXON_HERMES_SLACK_BOT_TOKEN="<LABEL_AXON_HERMES_SLACK_BOT_TOKEN>"
+LABEL_MUSE_SLACK_APP_TOKEN="cto-relay-muse-slack-app"
+LABEL_MUSE_SLACK_BOT_TOKEN="cto-relay-muse-slack-bot"
+LABEL_CLAUDE_SLACK_APP_TOKEN="cto-relay-claude-slack-app"
+LABEL_CLAUDE_SLACK_BOT_TOKEN="cto-relay-claude-slack-bot"
+LABEL_GEMINI_SLACK_APP_TOKEN="cto-relay-gemini-slack-app"
+LABEL_GEMINI_SLACK_BOT_TOKEN="cto-relay-gemini-slack-bot"
+LABEL_AXON_HERMES_SLACK_APP_TOKEN="cto-relay-axon-hermes-slack-app"
+LABEL_AXON_HERMES_SLACK_BOT_TOKEN="cto-relay-axon-hermes-slack-bot"
+# Vault repo deploy keys (C2-FU-2, C2-FU-3): one read-only key for close-out
+# read-back (all four programs), one write key for the nightly vault filing.
+LABEL_VAULT_READ_KEY="cto-relay-vault-read"
+LABEL_VAULT_WRITE_KEY="cto-relay-vault-write"

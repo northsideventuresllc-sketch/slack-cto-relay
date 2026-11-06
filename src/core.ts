@@ -65,7 +65,14 @@ export interface CoreDeps {
   sleep?: (ms: number) => Promise<void>;
   /** The event lane (relay.ts). Deferred work (the 1-hour start retry) re-enters it. */
   serialize?: <T>(fn: () => Promise<T>) => Promise<T>;
+  /** C2-FU-9: time from socket receipt the brain work before the short reply may take (default 2200 ms). */
+  ackBudgetMs?: number;
 }
+
+/** C2-FU-9: the brain work before a short reply must finish inside this budget, so the reply lands under 3 s. */
+export const ACK_BUDGET_MS = 2200;
+/** A start held only because the brain was too slow for the ack budget is retried after 1 minute, not the hourly outage cadence. */
+export const SLOW_BRAIN_RETRY_MS = MIN;
 
 export interface StartContext {
   eventKey: string;
@@ -110,7 +117,17 @@ export class RelayCore {
   /** Append a journal record and apply it to the queue in one step. */
   record(input: JournalInput): void {
     const rec = this.d.journal.append({ cto: this.d.cto.key, ...input });
+    const before = this.d.book.get(rec.fireId);
+    const wasTerminal = before?.terminal ?? true;
     this.d.book.apply(rec);
+    // ECO-FU-2: one cost line per start, for EVERY start — not only closed ones (close-out writes its
+    // own with the reported tokens). A start that never ran costs 0 tokens; one that ran and then
+    // failed/expired/was stopped is recorded as unmetered (null).
+    const after = this.d.book.get(rec.fireId);
+    if (after && !wasTerminal && after.terminal && rec.state !== 'closed') {
+      const minutes = Math.round((this.now() - after.acceptedAt) / 60_000);
+      this.d.runlog.cost(after.id, after.taskHash, this.d.cto.home, after.startedAt === null && after.claimAt === null ? 0 : null, minutes);
+    }
   }
 
   private stateRecord(fireId: string, state: JournalInput['state'], extra: Partial<JournalInput> = {}): void {
@@ -234,6 +251,9 @@ export class RelayCore {
     }
     if (!this.allowed.has(ev.authorId)) {
       this.d.runlog.check(ctx.eventKey, 'allowlist', 'author-not-allowed');
+      // KAR-FU-4: a person's /fire command (only people can run slash commands) gets a plain refusal
+      // instead of silence. Mentions from non-allowlisted authors stay silently ignored.
+      if (ev.ingress === 'slash_command') await this.replyTimed(ev.channelId, T.notAllowed(), ctx.receivedAt, null);
       return 'ignored';
     }
     this.d.runlog.check(ctx.eventKey, 'allowlist', 'ok');
@@ -296,43 +316,50 @@ export class RelayCore {
       await this.replyTimed(ctx.channelId, T.queueFull(), ctx.receivedAt, null);
       return 'queue-full';
     }
+    // C2-FU-9: the cap counts and the live lease read run CONCURRENTLY, inside the ack budget.
+    const deadline = ctx.receivedAt + (this.d.ackBudgetMs ?? ACK_BUDGET_MS);
+    const left = (): number => Math.max(50, deadline - this.now());
     let brainUp = true;
-    try {
-      const cap = await this.d.caps.check(this.d.brain, now);
-      if (cap.kind === 'refused') {
-        this.d.runlog.check(ctx.eventKey, 'queue', `cap-${cap.cap}`);
-        await this.replyTimed(ctx.channelId, cap.reply, ctx.receivedAt, null);
+    let slow = false;
+    const [capR, leaseR] = await Promise.allSettled([
+      withTimeout(this.d.caps.check(this.d.brain, now), left()),
+      withTimeout(this.d.lease.verifyLive(), left()),
+    ]);
+    if (capR.status === 'fulfilled') {
+      if (capR.value.kind === 'refused') {
+        this.d.runlog.check(ctx.eventKey, 'queue', `cap-${capR.value.cap}`);
+        await this.replyTimed(ctx.channelId, capR.value.reply, ctx.receivedAt, null);
         return 'cap';
       }
-    } catch {
-      brainUp = false; // counts unavailable; re-checked before the deferred brain write
+    } else {
+      brainUp = false; // counts unavailable (down, or too slow for the ack budget); re-checked before the deferred brain write
+      slow ||= capR.reason instanceof AdapterTimeout;
     }
     this.d.runlog.check(ctx.eventKey, 'queue', 'ok');
 
     const taskHash = sha256(task);
-    if (brainUp) {
-      // Fence: a live lease read — a stale-epoch fire is refused and logged.
-      let fenced: boolean;
-      try {
-        fenced = await this.d.lease.verifyLive();
-      } catch {
-        fenced = this.d.lease.canAct();
-        brainUp = false;
-      }
-      if (!fenced) {
-        this.d.runlog.check(ctx.eventKey, 'lease', 'stale-epoch');
-        return 'stale-epoch';
-      }
+    // Fence: a live lease read — a stale-epoch fire is refused and logged.
+    let fenced: boolean;
+    if (leaseR.status === 'fulfilled') fenced = leaseR.value;
+    else {
+      fenced = this.d.lease.canAct();
+      brainUp = false;
+      slow ||= leaseR.reason instanceof AdapterTimeout;
+    }
+    if (!fenced) {
+      this.d.runlog.check(ctx.eventKey, 'lease', 'stale-epoch');
+      return 'stale-epoch';
     }
     if (brainUp) {
-      const out = await this.fireToBrain(task, taskHash, normHash, idemKey, ctx);
-      if (out !== 'brain-down') return out;
+      const out = await this.fireToBrain(task, taskHash, normHash, idemKey, ctx, left());
+      if (out !== 'brain-down' && out !== 'brain-slow') return out;
+      slow ||= out === 'brain-slow';
     }
-    return this.holdBrainDown(task, taskHash, normHash, idemKey, ctx);
+    return this.holdBrainDown(task, taskHash, normHash, idemKey, ctx, slow);
   }
 
   /** brain row → journal + fsync → short reply. */
-  private async fireToBrain(task: string, taskHash: string, normHash: string, idemKey: string, ctx: StartContext): Promise<StartOutcome | 'brain-down'> {
+  private async fireToBrain(task: string, taskHash: string, normHash: string, idemKey: string, ctx: StartContext, budgetMs: number = ADAPTER_ANSWER_TIMEOUT_MS): Promise<StartOutcome | 'brain-down' | 'brain-slow'> {
     ctx.reachedAdapter = true;
     let runId: string;
     let status: FireStatus;
@@ -343,11 +370,17 @@ export class RelayCore {
           epoch: this.d.lease.currentEpoch(),
           meta: { taskHash, normHash, idemKey, fromAgent: this.agentByBotId.get(ctx.authorId) ?? 'CTO-RELAY', channelId: ctx.channelId, messageTs: ctx.messageTs, permalink: null },
         }),
-        ADAPTER_ANSWER_TIMEOUT_MS,
+        Math.min(ADAPTER_ANSWER_TIMEOUT_MS, budgetMs),
       );
       runId = res.runId;
       status = res.status;
     } catch (err) {
+      if (err instanceof AdapterTimeout && budgetMs < ADAPTER_ANSWER_TIMEOUT_MS) {
+        // C2-FU-9: too slow for the ack budget. Held like a brain-down start; a write that lands
+        // late is adopted by the retry (findFireRowByIdem), never written twice.
+        this.d.log.warn('brain write exceeded the ack budget; holding the start', {});
+        return 'brain-slow';
+      }
       if (err instanceof AdapterTimeout) {
         await this.d.poster.post(ctx.channelId, T.adapterTimeout('pending'), 'template');
         this.d.alert('adapter-answer-timeout', {});
@@ -395,7 +428,7 @@ export class RelayCore {
    * when its text is no longer held in memory (`heldTask === null`); a pending
    * hourly retry is never reported lost.
    */
-  private async holdBrainDown(task: string, taskHash: string, normHash: string, idemKey: string, ctx: StartContext): Promise<StartOutcome> {
+  private async holdBrainDown(task: string, taskHash: string, normHash: string, idemKey: string, ctx: StartContext, slow = false): Promise<StartOutcome> {
     const provisionalId = `p-${randomUUID()}`;
     try {
       this.record({ kind: 'fire-request', fireId: provisionalId, hash: taskHash, normHash, idemKey, eventKey: ctx.eventKey, channelId: ctx.channelId, provisional: true });
@@ -407,10 +440,13 @@ export class RelayCore {
     const e = this.d.book.get(provisionalId);
     if (e) {
       e.heldTask = task;
-      e.nextBrainRetryAt = this.now() + BRAIN_RETRY_MS;
+      e.nextBrainRetryAt = this.now() + (slow ? SLOW_BRAIN_RETRY_MS : BRAIN_RETRY_MS);
     }
     this.d.dedup.accept(idemKey, normHash, provisionalId, this.now());
     this.d.breaker.record(normHash, provisionalId, this.now());
+    // OPT-FU-3 / D5: every start writes its run-log `started` entry — a held start under its provisional id;
+    // when the brain write lands, retryHeld writes the brain-id `started` entry (reason names the provisional id).
+    this.d.runlog.started(provisionalId, taskHash, this.d.cto.key);
     const safe = this.d.poster.safeTask(task);
     // Manual CTOs: with the brain down the heartbeat cannot be read, so Muse CTO is treated as offline (fail-safe).
     const reply = this.d.cto.adapter === 'automatic-muse' ? T.brainDown(safe, provisionalId) : T.waitingBothDown(safe, provisionalId);
@@ -444,7 +480,8 @@ export class RelayCore {
       }
       if (!(await this.d.lease.verifyLive())) return;
       // A write that timed out may have landed: adopt it instead of writing twice.
-      const existing = await this.d.brain.findFireRowByIdem(this.d.cto.agentName, e.idemKey);
+      const found = await this.d.brain.findFireRowByIdem(this.d.cto.agentName, e.idemKey);
+      const existing = found && found.status === 'queued' ? found : null;
       const runId =
         existing?.id ??
         (
@@ -456,7 +493,7 @@ export class RelayCore {
         ).runId;
       const provisionalId = e.id;
       this.stateRecord(provisionalId, 'brain-written', { brainId: runId });
-      this.d.runlog.started(runId, e.taskHash, this.d.cto.key);
+      this.d.runlog.started(runId, e.taskHash, this.d.cto.key, provisionalId);
       const safe = this.d.poster.safeTask(task);
       const reply = this.d.cto.adapter === 'automatic-muse' ? T.startedAutomatically(safe, runId) : T.queuedForPerson(safe, runId, this.d.cto);
       await this.d.poster.post(e.channelId, reply, 'template', runId);

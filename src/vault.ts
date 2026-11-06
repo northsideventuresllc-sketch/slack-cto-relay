@@ -8,6 +8,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { existsSync } from 'node:fs';
 import { sha256 } from './util/hash.js';
 
 const run = promisify(execFile);
@@ -37,9 +38,22 @@ export function parseSidecar(text: string): string | null {
 export class GitVaultReader implements VaultReader {
   constructor(
     private readonly dir: string | null,
-    private readonly webBase: string | null, // e.g. <VAULT_WEB_BASE> = https://github.com/<owner>/<vault-repo>/blob/main
+    private readonly webBase: string | null, // CTO_RELAY_VAULT_WEB_BASE, e.g. https://github.com/<owner>/<vault-repo>/blob/main
     private readonly branch = 'main',
+    /** C2-FU-3: the read-only vault deploy key (label `cto-relay-vault-read`), fetched into this program's tmpfs key dir. */
+    private readonly readKeyPath: string | null = null,
+    private readonly knownHosts = '/etc/cto-relay/known_hosts',
+    /** C2-FU-3: the vault repo (CTO_RELAY_VAULT_REPO_URL); the checkout is created on first use, no manual clone step. */
+    private readonly repoUrl: string | null = null,
   ) {}
+
+  private gitEnv(): NodeJS.ProcessEnv {
+    if (!this.readKeyPath || !existsSync(this.readKeyPath)) return process.env;
+    return {
+      ...process.env,
+      GIT_SSH_COMMAND: `ssh -i ${this.readKeyPath} -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${this.knownHosts}`,
+    };
+  }
 
   private async show(path: string): Promise<Buffer | null> {
     try {
@@ -53,8 +67,16 @@ export class GitVaultReader implements VaultReader {
   async readBack(path: string): Promise<ReadBack> {
     if (!this.dir) return { ok: false, reason: 'not-configured' };
     if (!safeVaultPath(path)) return { ok: false, reason: 'bad-path' };
+    if (!existsSync(`${this.dir}/.git`) && this.repoUrl) {
+      try {
+        // Read-only use: no working tree needed — read-back reads `origin/main:<path>` objects.
+        await run('git', ['clone', '--quiet', '--no-checkout', this.repoUrl, this.dir], { timeout: 300_000, env: this.gitEnv() });
+      } catch {
+        return { ok: false, reason: 'fetch-failed' };
+      }
+    }
     try {
-      await run('git', ['-C', this.dir, 'fetch', '--quiet', 'origin', this.branch], { timeout: 60_000 });
+      await run('git', ['-C', this.dir, 'fetch', '--quiet', 'origin', this.branch], { timeout: 60_000, env: this.gitEnv() });
     } catch {
       return { ok: false, reason: 'fetch-failed' };
     }

@@ -23,6 +23,11 @@ export interface SlackSender {
 
 export type PostKind = 'template' | 'cto-words';
 
+/** Reuse a live lease confirmation this recent instead of reading again (keeps the short reply inside 3 s). */
+export const LIVE_FENCE_REUSE_MS = 2000;
+/** Cap on the live fence read; past it, the heartbeat-confirmed local check stands. */
+export const LIVE_FENCE_TIMEOUT_MS = 700;
+
 export type PostResult =
   | { ok: true; ts: string }
   | { ok: false; reason: 'stale-epoch' | 'blocked' | 'send-failed' | 'empty' };
@@ -58,8 +63,31 @@ export class Poster {
     return t;
   }
 
+  /**
+   * The post fence (OPT-FU-1 / KAR-FU-1). Contracts: "before firing or posting,
+   * the program checks its epoch against the lease". Every post now does a LIVE
+   * read of the lease row (epoch + holder), like a fire — so a deposed holder
+   * cannot post even inside its last heartbeat interval. If the brain cannot be
+   * reached for that read, the heartbeat-confirmed local check stands (the lease
+   * rule then stops all posting after 3 missed heartbeats — flag #16 unchanged:
+   * the fence is tightened, never loosened).
+   */
+  async fenced(): Promise<boolean> {
+    if (!this.lease.canAct()) return false;
+    // A live read in the last 2 s (e.g. the fire path's own check) already proves the epoch.
+    if (this.lease.recentlyVerified(LIVE_FENCE_REUSE_MS)) return true;
+    try {
+      return await Promise.race([
+        this.lease.verifyLive(),
+        new Promise<boolean>((_, reject) => setTimeout(() => reject(new Error('fence read timeout')), LIVE_FENCE_TIMEOUT_MS).unref()),
+      ]);
+    } catch {
+      return this.lease.canAct(); // brain unreachable or slow: the heartbeat-confirmed check stands
+    }
+  }
+
   async post(channelId: string, text: string, kind: PostKind, fireId: string | null = null): Promise<PostResult> {
-    if (!this.lease.canAct()) {
+    if (!(await this.fenced())) {
       this.log.error('post refused: stale or lapsed epoch', { fireId, channelId });
       this.runlog.write({ kind: 'post', fireId, channelId, result: 'refused-stale-epoch', writer: 'relay' });
       return { ok: false, reason: 'stale-epoch' };
@@ -91,6 +119,33 @@ export class Poster {
       this.log.error('post failed after backoff', { fireId, channelId, err: code });
       this.runlog.write({ kind: 'post', fireId, channelId, result: 'failed', reason: code.slice(0, 60), writer: 'relay' });
       this.onAlert(/invalid_auth|token_revoked|account_inactive|not_authed/.test(code) ? 'token-revoked' : 'post-failed', { fireId, channelId });
+      return { ok: false, reason: 'send-failed' };
+    }
+  }
+
+  /**
+   * The start-queue post (JB's start relayed by Muse CTO, D4): the explicit
+   * `<@CTO> fire: <task>` pattern, posted unstripped — the one post that may carry
+   * it. Same live fence and backoff as every post; a refusal or failure is
+   * alerted, never silent (C1-FU-7).
+   */
+  async postStartRelay(channelId: string, botUserId: string, task: string): Promise<PostResult> {
+    if (!(await this.fenced())) {
+      this.runlog.write({ kind: 'post', fireId: null, channelId, result: 'start-relay-refused-stale-epoch', writer: 'relay' });
+      this.onAlert('start-relay-refused-lease', { channelId });
+      return { ok: false, reason: 'stale-epoch' };
+    }
+    if (this.blocklist.check(task).length > 0) {
+      this.onAlert('start-relay-blocked', { channelId });
+      return { ok: false, reason: 'blocked' };
+    }
+    try {
+      const ts = await withBackoff(() => this.sender.postWithTs(channelId, `<@${botUserId}> fire: ${task}`), this.sleep);
+      this.runlog.write({ kind: 'post', fireId: null, channelId, ts, result: 'start-relayed', writer: 'relay' });
+      return { ok: true, ts };
+    } catch (err) {
+      this.runlog.write({ kind: 'post', fireId: null, channelId, result: 'start-relay-failed', reason: errorCode(err).slice(0, 60), writer: 'relay' });
+      this.onAlert('start-relay-post-failed', { channelId });
       return { ok: false, reason: 'send-failed' };
     }
   }
