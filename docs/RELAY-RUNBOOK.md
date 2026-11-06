@@ -62,7 +62,7 @@ Fill these in. Do not guess them. Every value below either has its real value he
    - **Slash commands, one per app, in Socket Mode** (Slash Commands): `/fire-muse`, `/fire-claude`, `/fire-gemini`, `/fire-axon-hermes`. Check each name is free first (dashboard list; fallback names in D4). The `commands` scope is already granted (Phase 1, 10 scopes each).
 2. **Agent names — set** (COUNCIL GATE round 1). `config/registry.json` carries:
    - `MUSE`: verified from a live row;
-   - `CLAUDE`: PLAN-v7 D7;
+   - `Claude CTO`: confirmed by JB (live rows carry it; PLAN-v7 D7 wrote `CLAUDE`);
    - `Gemini CTO`: seen in live rows;
    - `AXON-Hermes CTO`: matches the Slack bot name.
 
@@ -327,7 +327,7 @@ It must follow these rules:
 ### What each start writes to `agent_comms` (real columns only)
 | Column | Value |
 |---|---|
-| `to_agent` | the CTO's agent name (MUSE / CLAUDE / registry value) |
+| `to_agent` | the CTO's agent name from the registry (`MUSE`, `Claude CTO`, `Gemini CTO`, `AXON-Hermes CTO`) |
 | `from_agent` | the requesting CTO bot's agent name |
 | `from_harness` / `to_harness` | `cto-relay` / the CTO key |
 | `channel` | `slack` |
@@ -380,14 +380,14 @@ It is a 1-minute cron on the mini:
 It runs as user `cto-relay-muse`. The secrets come from that user's keychain and reach the poller on stdin only.
 - **What it checks:** it curls `http://198.19.0.2:9101..9104/health` and reads the `cto_heartbeat` row for MUSE.
 - **Offline:** the heartbeat is older than 30 min, or the brain is down (fail-safe).
-- **Alert at 45 min:** an `agent_comms` row to CLAUDE. If the brain is down, it writes `/var/lib/cto-relay/mini/alerts.jsonl` instead, which Claude CTO reads at the morning check-in.
-- **Failover detected:** the VM Muse health fails 3 consecutive polls AND Muse CTO is offline. The poller sends the failover row to CLAUDE once.
+- **Alert at 45 min:** an `agent_comms` row to `Claude CTO`. If the brain is down, it writes `/var/lib/cto-relay/mini/alerts.jsonl` instead, which Claude CTO reads at the morning check-in.
+- **Failover detected:** the VM Muse health fails 3 consecutive polls AND Muse CTO is offline. The poller sends the failover row to `Claude CTO` once.
 - **Dead-owner sweep (R7-NEW-4):** while the Muse program is down, the poller runs the D5 §6 sweep every 6 h with the **reduced** still-active test: prongs (b) + (c) only. Prong (a) is skipped, because the mini has no adapter to probe and no v1 adapter has a live probe anyway.
   - (b) reads the last 24 h of Slack history in the four CTO channels from `config/registry.json`. It uses the Muse CTO bot token (`channels:history` / `groups:history`) from the `cto-relay-muse` login keychain, keychain item `cto-relay-muse-slack-bot`.
 
 **Mini keychain items** (C1-FU-3) are created at failover setup in each `cto-relay-<cto>` macOS user's login keychain, with the same names as the vault labels: `cto-relay-<cto>-slack-app`, `cto-relay-<cto>-slack-bot`, and, Muse only, `cto-relay-muse` (the brain key).
   - (c) reads `evidence.relay.last_progress_at` from the **live** brain rows, not from the up-to-24-hours-stale off-host run-log copy.
-  - Findings go to CLAUDE, labelled "reduced test: prongs b+c". The fallback never posts in Slack.
+  - Findings go to `Claude CTO`, labelled "reduced test: prongs b+c". The fallback never posts in Slack.
 - **The poller's own liveness (R7-NEW-5):** every run writes a `cto_heartbeat` row for agent `MINI-POLLER`. The VM Muse program checks it every minute. If it is stale for over 5 min, it alerts and posts "The mini poller has stopped answering…" in #cto-bots, once per incident, then "The mini poller is back." on recovery.
 
 ### The dead-alerter fallback — Claude CTO's 9am check-in (R7-NEW-5)

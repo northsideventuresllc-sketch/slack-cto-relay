@@ -148,7 +148,7 @@ test('broker: a manual program reaches only its own rows and its own lease name'
   const claude = new BrokeredBrain(brokerSocketPath(runDir, 'claude'));
   await claude.ping();
   const ev = { v: 0, cto: 'claude', task_hash: 'h', norm_hash: 'n', epoch: 1 };
-  const row = await claude.insertFireRow({ toAgent: 'CLAUDE', fromAgent: 'MUSE', toHarness: 'claude', subject: 's', body: 'b', evidence: ev, firedAt: new Date().toISOString() });
+  const row = await claude.insertFireRow({ toAgent: 'Claude CTO', fromAgent: 'MUSE', toHarness: 'claude', subject: 's', body: 'b', evidence: ev, firedAt: new Date().toISOString() });
   assert.equal((await claude.getFireRow(row.id))?.id, row.id);
   await assert.rejects(claude.insertFireRow({ toAgent: 'MUSE', fromAgent: 'MUSE', toHarness: 'muse', subject: 's', body: 'b', evidence: { ...ev, cto: 'muse' }, firedAt: '' }));
   await assert.rejects(claude.getLease('muse'));

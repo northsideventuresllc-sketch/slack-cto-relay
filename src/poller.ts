@@ -5,8 +5,8 @@
 // - Failover is detected when the VM's Muse health endpoint does not answer for
 //   3 consecutive 1-minute polls AND the heartbeat is older than 30 minutes.
 //   On failover with Muse CTO offline, the poller itself sends the agent_comms
-//   row to CLAUDE.
-// - Alert transport: an agent_comms row addressed to CLAUDE; if the brain is
+//   row to Claude CTO (its registry agent name).
+// - Alert transport: an agent_comms row addressed to Claude CTO (registry agentName); if the brain is
 //   down, the local file /var/lib/cto-relay/mini/alerts.jsonl (read by Claude CTO
 //   at the next morning check-in).
 // - Dead-owner fallback (D5 §6): while the Muse relay program is down, the
@@ -20,7 +20,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { WebClient, LogLevel } from '@slack/web-api';
 import { DirectBrain, type BrainApi } from './brain.js';
-import { loadRegistry, type Registry } from './config.js';
+import { ctoEntry, loadRegistry, type Registry } from './config.js';
 import { MuseDuties, POLLER_AGENT } from './sweep.js';
 import type { Poster } from './poster.js';
 import { appendLineCapped, writeFileAtomicSync } from './util/durable.js';
@@ -30,7 +30,6 @@ import { HOUR, MIN } from './util/time.js';
 export const OFFLINE_DETECT_MS = 30 * MIN;
 export const OFFLINE_ALERT_MS = 45 * MIN;
 export const FAILOVER_POLLS = 3;
-const ALERT_TO = 'CLAUDE';
 const FROM = 'CTO-RELAY-MINI-POLLER';
 
 const StateSchema = z.object({
@@ -84,6 +83,8 @@ export async function runPoller(env: NodeJS.ProcessEnv = process.env): Promise<n
   const statePath = join(stateDir, 'poller-state.json');
   const alertsPath = join(stateDir, 'alerts.jsonl');
   const registry: Registry = loadRegistry(env.CTO_RELAY_REGISTRY);
+  // Alerts go to Claude CTO's mailbox: its agent name comes from the registry, the single source ("Claude CTO").
+  const ALERT_TO = ctoEntry(registry, 'claude').agentName;
   const vmLan = env.CTO_RELAY_VM_LAN ?? registry.healthBind.find((h) => h !== '127.0.0.1') ?? '127.0.0.1';
   const url = env.SUPABASE_URL;
   if (!url) return 78;

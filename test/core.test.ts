@@ -182,7 +182,7 @@ test('reconciler: a brain row with no journal entry (journal-failure orphan) is 
   const h = await makeHarness('claude');
   const claude = ctoEntry(h.registry, 'claude');
   const row = await h.brain.insertFireRow({
-    toAgent: 'CLAUDE',
+    toAgent: 'Claude CTO',
     fromAgent: 'MUSE',
     toHarness: 'claude',
     subject: 's',

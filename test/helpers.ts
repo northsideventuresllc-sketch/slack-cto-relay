@@ -36,7 +36,7 @@ import { REPO_ROOT } from '../src/config.js';
 export function testRegistry(): Registry {
   const r = loadRegistry();
   const ids: Record<string, string> = { muse: 'CMUSE0001', claude: 'CCLAUDE01', gemini: 'CGEMINI01', 'axon-hermes': 'CAXON0001' };
-  const agents: Record<string, string> = { muse: 'MUSE', claude: 'CLAUDE', gemini: 'Gemini CTO', 'axon-hermes': 'AXON-Hermes CTO' };
+  const agents: Record<string, string> = { muse: 'MUSE', claude: 'Claude CTO', gemini: 'Gemini CTO', 'axon-hermes': 'AXON-Hermes CTO' };
   return { ...r, ctos: r.ctos.map((c) => ({ ...c, channelId: ids[c.key] ?? c.channelId, agentName: agents[c.key] ?? c.agentName })) };
 }
 
