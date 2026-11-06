@@ -1,0 +1,76 @@
+# /etc/systemd/system/cto-relay-muse.service
+# Slack CTO Loop relay — Muse CTO. One of four separate services (PLAN-v7 D6):
+# shared code, separate process, separate service user, separate keys, queue and journal.
+#
+# Keys (D7): ExecStartPre runs /usr/local/bin/cto-relay-fetch-keys muse as root on EVERY
+# start; it fetches fresh from the Secure Vault into tmpfs /run/credentials/cto-relay-muse/
+# (dir 0500, files 0400, owner cto-relay-muse) and the process reads them from there
+# (CTO_RELAY_KEY_DIR). Files:
+#   slack-app-token  (Socket Mode app-level token)
+#   slack-bot-token  (bot token)
+#   brain-key        (Muse only: cto-relay-muse brain key — the other three programs reach the brain through the Muse program's broker)
+# No key value ever appears in this file.
+
+[Unit]
+Description=Slack CTO Loop relay — Muse CTO
+Documentation=file:///opt/cto-relay/docs/RELAY-RUNBOOK.md
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=cto-relay-muse
+Group=cto-relay-muse
+SupplementaryGroups=cto-relay-admin cto-relay-claude cto-relay-gemini cto-relay-axon-hermes
+EnvironmentFile=/etc/cto-relay/relay.env
+Environment=CTO_RELAY_CTO=muse
+Environment=CTO_RELAY_KEY_DIR=/run/credentials/cto-relay-muse
+Environment=CTO_RELAY_STATE_DIR=/var/lib/cto-relay/muse
+Environment=CTO_RELAY_RUN_DIR=/run/cto-relay
+Environment=CTO_RELAY_HOLDER=vm
+# Each program reads back close-out logs from its own vault checkout (git fetch, read-only use).
+Environment=CTO_RELAY_VAULT_DIR=/var/lib/cto-relay/muse/vault
+ExecStartPre=+/usr/local/bin/cto-relay-fetch-keys muse
+ExecStart=/usr/bin/node /opt/cto-relay/dist/index.js run
+ExecStopPost=+/usr/local/bin/cto-relay-fetch-keys --wipe muse
+# Fail-closed: brain down / lease held elsewhere → exit 1 → retried every 30 s.
+# Exit 78 = stay down (revoked token, Socket Mode reconnects exhausted, config placeholders) → alert, no restart.
+Restart=on-failure
+RestartSec=30
+RestartPreventExitStatus=78
+
+StateDirectory=cto-relay/muse
+StateDirectoryMode=0700
+# /run/cto-relay/<cto> (control socket) and /run/cto-relay/broker come from
+# /etc/tmpfiles.d/cto-relay.conf so the broker and admin groups can reach them.
+UMask=0077
+
+# Isolation envelope (D6): MemoryMax=128M, CPUQuota=25%. The program's own watchdog
+# alerts and exits on >50% CPU sustained 5 minutes.
+MemoryMax=128M
+CPUQuota=25%
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/cto-relay/muse /run/cto-relay
+ReadOnlyPaths=/opt/cto-relay /etc/cto-relay/relay.env
+
+[Install]
+WantedBy=multi-user.target

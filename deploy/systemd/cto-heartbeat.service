@@ -1,0 +1,24 @@
+# /etc/systemd/system/cto-heartbeat.service
+# The cron `cto-heartbeat` (PLAN-v7 D4): writes Muse CTO's cto_heartbeat row
+# (agent MUSE) with the cto-relay-muse brain key. Fired every 15 minutes by
+# cto-heartbeat.timer.
+[Unit]
+Description=Slack CTO Loop — Muse CTO heartbeat (cto_heartbeat)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=cto-relay-muse
+Group=cto-relay-muse
+EnvironmentFile=/etc/cto-relay/relay.env
+Environment=CTO_RELAY_KEY_DIR=/run/credentials/cto-heartbeat
+ExecStartPre=+/usr/local/bin/cto-relay-fetch-keys heartbeat
+ExecStart=/usr/bin/node /opt/cto-relay/dist/index.js heartbeat
+ExecStopPost=+/usr/local/bin/cto-relay-fetch-keys --wipe heartbeat
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadOnlyPaths=/opt/cto-relay /etc/cto-relay/relay.env
+MemoryMax=128M

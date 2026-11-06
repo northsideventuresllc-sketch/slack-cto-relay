@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Mini (failover host) relay for one CTO. Copy to
+     /Library/LaunchDaemons/com.northside.cto-relay.<cto>.plist, replacing CTO_KEY.
+     Runs as the per-CTO macOS user cto-relay-<cto> (D6 isolation); keys come from
+     that user's login keychain via the wrapper, never from this file.
+     Not loaded at boot (RunAtLoad false): started only by cto-relay-mini-sync.sh --start. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.northside.cto-relay.CTO_KEY</string>
+  <key>UserName</key><string>cto-relay-CTO_KEY</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/cto-relay/deploy/scripts/mini-run.sh</string>
+    <string>CTO_KEY</string>
+  </array>
+  <key>RunAtLoad</key><false/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>StandardOutPath</key><string>/var/log/cto-relay-CTO_KEY.log</string>
+  <key>StandardErrorPath</key><string>/var/log/cto-relay-CTO_KEY.log</string>
+</dict>
+</plist>

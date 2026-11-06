@@ -1,0 +1,25 @@
+{
+  "$comment": "Post blocklist (PLAN-v7 D2). Owner: Muse CTO, reviewed monthly; the canonical list is in docs/RELAY-RUNBOOK.md and must match this file. Each entry is a JavaScript regular expression source, matched case-insensitively. A hit BLOCKS free-form post-queue text and REDACTS relay-templated text, audit snippets and mirror entries.",
+  "keyPatterns": [
+    "xox[baprs]-[A-Za-z0-9-]{6,}",
+    "xapp-[A-Za-z0-9-]{6,}",
+    "sk-[A-Za-z0-9_-]{20,}",
+    "sb_secret_[A-Za-z0-9_-]{8,}",
+    "eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}",
+    "-----BEGIN [A-Z ]*PRIVATE KEY-----"
+  ],
+  "emailPatterns": [
+    "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"
+  ],
+  "idNumberPatterns": [
+    "\\b\\d{3}-\\d{2}-\\d{4}\\b",
+    "\\b(?:\\d[ -]?){13,19}\\b"
+  ],
+  "privateMatterPatterns": [
+    "\\b(?:home|street|mailing|postal) address\\b",
+    "\\bphone(?: number)?\\s*[:#]",
+    "\\(?\\b\\d{3}\\)?[-.\\s]\\d{3}[-.\\s]\\d{4}\\b",
+    "\\b(?:health|medical|diagnos\\w*|prescription|therapy)\\b",
+    "[$€£]\\s?\\d[\\d,]*(?:\\.\\d+)?"
+  ]
+}

@@ -1,0 +1,4 @@
+# /etc/sudoers.d/cto-relay — Muse CTO's main-chat user may append to the Muse
+# post-queue as cto-relay-muse (the file is owner cto-relay-muse, mode 0600 —
+# PLAN-v7 D2). Replace <MUSE_CTO_USER> with that user's login before installing.
+<MUSE_CTO_USER> ALL=(cto-relay-muse) NOPASSWD: /usr/local/bin/cto-relay post-queue-append *
